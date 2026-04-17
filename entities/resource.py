@@ -185,7 +185,7 @@ class MeatNode(ResourceNode):
 
     # ------------------------------------------------------------------
 
-    def update(self, dt: float):
+    def update(self, dt: float, tile_map=None):
         if self._sheep_state == "idle":
             self._idle_timer -= dt
             if self._idle_timer <= 0:

@@ -2,7 +2,7 @@ import math
 import random
 import pygame
 from camera import Camera
-from map import TileMap, TILE_SIZE
+from map import TileMap, TILE_SIZE, GRASS
 from entities.archer import Archer
 from entities.lancer import Lancer
 from entities.pawn import Pawn
@@ -81,7 +81,7 @@ class Game:
             self.pawns.append(Pawn(cx + dx, cy + dy, team="blue"))
 
         # --- Resource nodes (shared map, accessible to both sides) ---
-        rng = random.Random(7)
+        rng = random.Random()
         border = 5
 
         def rand_grass_pos():
@@ -95,15 +95,33 @@ class Game:
                     )
             return cx, cy
 
-        for _ in range(5):
-            x, y = rand_grass_pos()
-            self.resources.append(GoldNode(x, y, variant=rng.randint(1, 6)))
-        for i in range(6):
-            x, y = rand_grass_pos()
-            self.resources.append(WoodNode(x, y, variant=i))
-        for _ in range(4):
-            x, y = rand_grass_pos()
-            self.resources.append(MeatNode(x, y))
+        MIN_RESOURCE_DIST = 56.0
+
+        def spawn_clumps(num_clumps, clump_min, clump_max, radius, factory):
+            for _ in range(num_clumps):
+                cx, cy = rand_grass_pos()
+                count       = rng.randint(clump_min, clump_max)
+                start_angle = rng.uniform(0, 2 * math.pi)
+                spread      = count - 1  # resources surrounding the center
+                for i in range(count):
+                    if i == 0:
+                        x, y = cx, cy
+                    else:
+                        angle = start_angle + (i - 1) * (2 * math.pi / spread)
+                        dist  = rng.uniform(radius * 0.5, radius)
+                        x = cx + math.cos(angle) * dist
+                        y = cy + math.sin(angle) * dist
+                    col, row = int(x // TILE_SIZE), int(y // TILE_SIZE)
+                    if self.map.tile_at(col, row) != GRASS:
+                        continue
+                    if any(math.hypot(r.x - x, r.y - y) < MIN_RESOURCE_DIST
+                           for r in self.resources):
+                        continue
+                    self.resources.append(factory(x, y))
+
+        spawn_clumps(4, 1, 3, 90,  lambda x, y: GoldNode(x, y, variant=rng.randint(1, 6)))
+        spawn_clumps(6, 3, 5, 90,  lambda x, y: WoodNode(x, y, variant=rng.randint(0, 3)))
+        spawn_clumps(3, 2, 5, 80,  lambda x, y: MeatNode(x, y))
 
     # ------------------------------------------------------------------
     # Helpers

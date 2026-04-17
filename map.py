@@ -82,7 +82,7 @@ class TileMap:
             self.tiles.append(tile_row)
 
         # Scatter some water "lakes" inside the island for variety
-        rng = random.Random(42)
+        rng = random.Random()
         for _ in range(8):
             lx = rng.randint(border + 1, self.cols - border - 4)
             ly = rng.randint(border + 1, self.rows - border - 4)
