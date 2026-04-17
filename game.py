@@ -3,6 +3,7 @@ import pygame
 from camera import Camera
 from map import TileMap, TILE_SIZE
 from entities.unit import Archer
+from entities.lancer import Lancer
 from entities.projectile import Arrow
 from systems.pathfinding import astar
 
@@ -25,7 +26,7 @@ class Game:
 
         self.font = pygame.font.SysFont(None, 22)
 
-        self.units:   list[Archer] = []
+        self.units:   list[Archer | Lancer] = []
         self.arrows:  list[Arrow]  = []
 
         self._spawn_starting_units()
@@ -42,13 +43,17 @@ class Game:
         cx = self.map.pixel_width  // 2
         cy = self.map.pixel_height // 2
 
-        # Player archers — left side
-        for dx, dy in [(-160, 0), (-80, 0), (0, 0), (-120, 70), (-40, 70)]:
+        # Player units — left side
+        for dx, dy in [(-160, -40), (-80, -40), (0, -40)]:
             self.units.append(Archer(cx + dx, cy + dy, team="blue"))
+        for dx, dy in [(-140, 40), (-60, 40), (20, 40)]:
+            self.units.append(Lancer(cx + dx, cy + dy, team="blue"))
 
-        # Enemy archers — right side (spread out so they're attackable)
-        for dx, dy in [(200, -60), (280, 0), (200, 60), (360, -40), (360, 40)]:
+        # Enemy units — right side
+        for dx, dy in [(200, -60), (280, -40), (360, -60)]:
             self.units.append(Archer(cx + dx, cy + dy, team="black"))
+        for dx, dy in [(220, 40), (300, 60), (380, 40)]:
+            self.units.append(Lancer(cx + dx, cy + dy, team="black"))
 
     # ------------------------------------------------------------------
     # Event handling

@@ -20,6 +20,10 @@ class Entity:
     def alive(self) -> bool:
         return self.hp > 0
 
+    def receive_melee_hit(self, attacker):
+        """Called when struck by a melee attack. Override to react (e.g. play defence animation)."""
+        pass
+
     def draw_health_bar(self, surface: pygame.Surface, camera, width: int = 40, force: bool = False):
         # Only show health bar when selected or damaged
         if not force and not self.selected and self.hp == self.max_hp:
