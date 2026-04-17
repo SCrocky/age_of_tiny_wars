@@ -26,6 +26,7 @@ class TileMap:
         self.cols = cols
         self.rows = rows
         self.tiles: list[list[int]] = []
+        self.blocked: set[tuple[int, int]] = set()  # walkability overlay (renders as grass)
 
         self._load_sprites()
         self._generate()
@@ -111,7 +112,36 @@ class TileMap:
         return int(wx // TILE_SIZE), int(wy // TILE_SIZE)
 
     def is_walkable(self, col: int, row: int) -> bool:
-        return self.tile_at(col, row) == GRASS
+        return self.tile_at(col, row) == GRASS and (col, row) not in self.blocked
+
+    def clear_area(self, world_x: float, world_y: float, tile_radius: int):
+        """Force all tiles within tile_radius of a world position to GRASS."""
+        cx = int(world_x // TILE_SIZE)
+        cy = int(world_y // TILE_SIZE)
+        for dr in range(-tile_radius, tile_radius + 1):
+            for dc in range(-tile_radius, tile_radius + 1):
+                col, row = cx + dc, cy + dr
+                if 0 <= col < self.cols and 0 <= row < self.rows:
+                    self.tiles[row][col] = GRASS
+
+    def block_area(self, world_x: float, world_y: float, half_w: int, half_h: int):
+        """Mark a rectangular tile area as unwalkable without changing its visual."""
+        cx = int(world_x // TILE_SIZE)
+        cy = int(world_y // TILE_SIZE)
+        for dr in range(-half_h, half_h + 1):
+            for dc in range(-half_w, half_w + 1):
+                col, row = cx + dc, cy + dr
+                if 0 <= col < self.cols and 0 <= row < self.rows:
+                    self.blocked.add((col, row))
+
+    def block_tiles(self, world_x: float, world_y: float, offsets: list[tuple[int, int]]):
+        """Mark specific tile offsets (dc, dr) relative to a world position as unwalkable."""
+        cx = int(world_x // TILE_SIZE)
+        cy = int(world_y // TILE_SIZE)
+        for dc, dr in offsets:
+            col, row = cx + dc, cy + dr
+            if 0 <= col < self.cols and 0 <= row < self.rows:
+                self.blocked.add((col, row))
 
     # ------------------------------------------------------------------
     # Rendering
