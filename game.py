@@ -362,7 +362,10 @@ class Game:
             return
 
         # Right-click on a resource node → gather (pawns only)
-        friendly_depots = [b for b in self.buildings if b.team == "blue" and b.alive]
+        friendly_depots = [
+            b for b in self.buildings
+            if b.team == "blue" and b.alive and type(b).__name__ in ("Castle", "House")
+        ]
         if friendly_depots and selected_pawns:
             resource = next(
                 (
