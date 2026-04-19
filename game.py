@@ -246,7 +246,7 @@ class Game:
             return
         archery = next(
             (b for b in self.buildings if b.team == "blue"
-             and b.selected and b.alive and type(b).__name__ == "Archery"),
+             and b.selected and b.alive and isinstance(b, Archery)),
             None,
         )
         if archery is None:
@@ -284,7 +284,7 @@ class Game:
             return
         barracks = next(
             (b for b in self.buildings if b.team == "blue"
-             and b.selected and b.alive and type(b).__name__ == "Barracks"),
+             and b.selected and b.alive and isinstance(b, Barracks)),
             None,
         )
         if barracks is None:
@@ -304,7 +304,7 @@ class Game:
             return
         barracks = next(
             (b for b in self.buildings if b.team == "blue"
-             and b.selected and b.alive and type(b).__name__ == "Barracks"),
+             and b.selected and b.alive and isinstance(b, Barracks)),
             None,
         )
         if barracks is None:
@@ -413,9 +413,9 @@ class Game:
             eco = self.economy[team]
             eco["pop"] = sum(1 for u in self.units + self.pawns if u.team == team)
             eco["pop_cap"] = sum(
-                10 if type(b).__name__ == "Castle" else House.POP_BONUS
+                b.pop_bonus
                 for b in self.buildings
-                if b.team == team and b.alive and type(b).__name__ in ("Castle", "House")
+                if b.team == team and b.alive and b.pop_bonus > 0
             )
 
     def update(self, dt: float):

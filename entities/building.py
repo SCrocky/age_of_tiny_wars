@@ -11,6 +11,7 @@ class Building(Entity):
     COLLISION_W = DISPLAY_W
     COLLISION_H = DISPLAY_H
     is_depot    = False
+    pop_bonus   = 0
 
     def __init__(self, x: float, y: float, team: str, max_hp: int = 200):
         super().__init__(x, y, team, max_hp)
@@ -91,8 +92,8 @@ class House(Building):
     DISPLAY_H   = 128
     COLLISION_W = 90
     COLLISION_H = 70
-    POP_BONUS   = 5
     is_depot    = True
+    pop_bonus   = 5
 
     def __init__(self, x: float, y: float, team: str, variant: int = 1):
         super().__init__(x, y, team, max_hp=150)
@@ -120,6 +121,7 @@ class Castle(Building):
     COLLISION_W = 220
     COLLISION_H = 100
     is_depot    = True
+    pop_bonus   = 10
 
     def __init__(self, x: float, y: float, team: str):
         super().__init__(x, y, team, max_hp=500)
