@@ -38,9 +38,8 @@ class Archer(Unit):
         self._frame_idx:   int   = 0
         self._anim_timer:  float = 0.0
 
-        self.attack_range:   float = self.ATTACK_RANGE
-        self._shoot_timer:   float = 0.0
-        self._arrow_spawned: bool  = False
+        self.attack_range: float = self.ATTACK_RANGE
+        self._shoot_timer: float = 0.0
 
     # ------------------------------------------------------------------
     # Update  →  returns list of Arrow objects to be added to the world
@@ -49,7 +48,7 @@ class Archer(Unit):
     def update(self, dt: float, tile_map=None) -> list[Arrow]:
         spawned: list[Arrow] = []
 
-        self._attack_cooldown = max(0.0, self._attack_cooldown - dt)
+        self._time += dt
 
         if self.attack_target is not None:
             if not self.attack_target.alive:
@@ -86,7 +85,7 @@ class Archer(Unit):
     # ------------------------------------------------------------------
 
     def _tick_attack(self, dt: float):
-        if self._attack_cooldown > 0:
+        if self._time - self._last_shot_time < self.ATTACK_COOLDOWN:
             return None
 
         tx, _ = self.attack_target.closest_point(self.x, self.y)
@@ -99,11 +98,9 @@ class Archer(Unit):
 
         self._shoot_timer += dt
 
-        if not self._arrow_spawned and self._shoot_timer >= self.SHOOT_DELAY:
-            self._arrow_spawned   = True
-            self._attack_cooldown = self.ATTACK_COOLDOWN
-            self._shoot_timer     = 0.0
-            self._arrow_spawned   = False
+        if self._shoot_timer >= self.SHOOT_DELAY:
+            self._last_shot_time = self._time
+            self._shoot_timer    = 0.0
             return Arrow(self.x, self.y, self.attack_target, ARROW_DAMAGE, self.team)
 
         return None

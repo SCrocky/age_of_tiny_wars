@@ -97,7 +97,6 @@ class Lancer(Unit):
 
         self.attack_range: float = self.ATTACK_RANGE
         self._hit_timer:   float = 0.0
-        self._hit_dealt:   bool  = False
 
         self._defence_timer: float = 0.0
         self._def_dir_key:   str   = "Right"
@@ -122,7 +121,7 @@ class Lancer(Unit):
     # ------------------------------------------------------------------
 
     def update(self, dt: float, tile_map=None) -> list:
-        self._attack_cooldown = max(0.0, self._attack_cooldown - dt)
+        self._time += dt
 
         if self._defence_timer > 0:
             self._defence_timer -= dt
@@ -140,9 +139,8 @@ class Lancer(Unit):
                     self._update_attack_direction()
                     self._tick_melee(dt)
                 else:
-                    self._state = "run"
+                    self._state     = "run"
                     self._hit_timer = 0.0
-                    self._hit_dealt = False
                     if tile_map is not None:
                         self._chase_timer -= dt
                         if self._chase_timer <= 0:
@@ -169,21 +167,19 @@ class Lancer(Unit):
         self._dir_key, self._flip_dir = _direction(dx, dy)
 
     def _tick_melee(self, dt: float):
-        if self._attack_cooldown > 0:
+        if self._time - self._last_shot_time < ATTACK_COOLDOWN:
             return
 
         if self._hit_timer == 0.0:
             self._frame_idx = 0
 
         self._hit_timer += dt
-        if not self._hit_dealt and self._hit_timer >= HIT_DELAY:
-            self._hit_dealt = True
+        if self._hit_timer >= HIT_DELAY:
             self.attack_target.take_damage(ATTACK_DAMAGE, is_melee=True)
             self.attack_target.receive_melee_hit(self)
-            self._attack_cooldown = ATTACK_COOLDOWN
-            self._hit_timer       = 0.0
-            self._hit_dealt       = False
-            self._frame_idx       = 0
+            self._last_shot_time = self._time
+            self._hit_timer      = 0.0
+            self._frame_idx      = 0
 
     def _tick_animation(self, dt: float):
         self._anim_timer += dt

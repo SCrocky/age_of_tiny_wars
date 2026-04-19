@@ -54,9 +54,8 @@ class Warrior(Unit):
         self._anim_timer:   float = 0.0
         self._attack_set:   int   = 0    # alternates 0 / 1
 
-        self.attack_range:  float = self.ATTACK_RANGE
-        self._hit_timer:    float = 0.0
-        self._hit_dealt:    bool  = False
+        self.attack_range: float = self.ATTACK_RANGE
+        self._hit_timer:   float = 0.0
 
         self._guard_ready:    bool  = True    # one block available per attack cycle
         self._guard_timer:    float = 0.0     # drives guard anim display
@@ -83,8 +82,8 @@ class Warrior(Unit):
     # ------------------------------------------------------------------
 
     def update(self, dt: float, tile_map=None) -> list:
-        self._attack_cooldown = max(0.0, self._attack_cooldown - dt)
-        self._guard_timer     = max(0.0, self._guard_timer - dt)
+        self._time        += dt
+        self._guard_timer  = max(0.0, self._guard_timer - dt)
 
         if self.attack_target is not None:
             if not self.attack_target.alive:
@@ -95,9 +94,8 @@ class Warrior(Unit):
                     self._state = "attack"
                     self._tick_melee(dt)
                 else:
-                    self._state      = "run"
-                    self._hit_timer  = 0.0
-                    self._hit_dealt  = False
+                    self._state     = "run"
+                    self._hit_timer = 0.0
                     if tile_map is not None:
                         self._chase_timer -= dt
                         if self._chase_timer <= 0:
@@ -119,7 +117,7 @@ class Warrior(Unit):
     # ------------------------------------------------------------------
 
     def _tick_melee(self, dt: float):
-        if self._attack_cooldown > 0:
+        if self._time - self._last_shot_time < ATTACK_COOLDOWN:
             return
 
         if self._hit_timer == 0.0:
@@ -130,16 +128,14 @@ class Warrior(Unit):
             self._facing_right = dx > 0
 
         self._hit_timer += dt
-        if not self._hit_dealt and self._hit_timer >= HIT_DELAY:
-            self._hit_dealt       = True
+        if self._hit_timer >= HIT_DELAY:
             self.attack_target.take_damage(ATTACK_DAMAGE, is_melee=True)
             self.attack_target.receive_melee_hit(self)
-            self._attack_cooldown = ATTACK_COOLDOWN
-            self._hit_timer       = 0.0
-            self._hit_dealt       = False
-            self._guard_ready     = True    # refresh block for next cooldown window
-            self._attack_set      = 1 - self._attack_set
-            self._frame_idx       = 0
+            self._last_shot_time = self._time
+            self._hit_timer      = 0.0
+            self._guard_ready    = True
+            self._attack_set     = 1 - self._attack_set
+            self._frame_idx      = 0
 
     def _tick_animation(self, dt: float):
         self._anim_timer += dt
@@ -155,7 +151,7 @@ class Warrior(Unit):
         if self._guard_timer > 0:
             return self._frames_guard
         if self._state == "attack":
-            if self._attack_cooldown > 0:
+            if self._time - self._last_shot_time < ATTACK_COOLDOWN:
                 return self._frames_idle
             return self._frames_attack[self._attack_set]
         if self._state == "run":

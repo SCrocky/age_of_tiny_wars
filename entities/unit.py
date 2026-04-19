@@ -16,9 +16,10 @@ class Unit(Entity):
         super().__init__(x, y, team, max_hp)
         self.path: list[tuple[int, int]] = []
         self.attack_target = None
-        self._attack_cooldown: float = 0.0
-        self._chase_timer:     float = 0.0
-        self._facing_right:    bool  = True
+        self._time:           float = 0.0
+        self._last_shot_time: float = 0.0
+        self._chase_timer:    float = 0.0
+        self._facing_right:   bool  = True
 
     # ------------------------------------------------------------------
     # Commands
