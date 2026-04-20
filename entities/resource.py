@@ -96,8 +96,11 @@ class WoodNode(ResourceNode):
     FRAME_W       = 192   # 1536px sheet ÷ 8 frames
     DISPLAY_SIZE  = 112
 
+    ANIM_FPS = 5
+
     def __init__(self, x: float, y: float, variant: int = 0):
         super().__init__(x, y)
+        self._break_timer = 0.0
         n = (variant % 4) + 1
         self._frames = _load_sheet(
             f"assets/Terrain/Resources/Wood/Trees/Tree{n}.png",
@@ -113,6 +116,18 @@ class WoodNode(ResourceNode):
 
     def _frame_count(self) -> int:
         return len(self._frames)
+
+    def update(self, dt: float):
+        if self._break_timer > 0:
+            self._break_timer -= dt
+            return
+        self._anim_timer += dt
+        if self._anim_timer >= 1.0 / self.ANIM_FPS:
+            self._anim_timer -= 1.0 / self.ANIM_FPS
+            next_frame = (self._frame_idx + 1) % self._frame_count()
+            if next_frame == 0:
+                self._break_timer = random.randint(2, 9)
+            self._frame_idx = next_frame
 
     def render(self, surface: pygame.Surface, camera):
         sx, sy = camera.world_to_screen(self.x, self.y)

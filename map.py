@@ -27,10 +27,21 @@ class TileMap:
         self.cols = cols
         self.rows = rows
         self.tiles: list[list[int]] = []
-        self.blocked: set[tuple[int, int]] = set()  # walkability overlay (renders as grass)
+        self.blocked: set[tuple[int, int]] = set()
 
         self._load_sprites()
         self._generate()
+
+    @classmethod
+    def from_data(cls, cols: int, rows: int, tiles: list[list[int]]) -> "TileMap":
+        """Create a TileMap from a pre-built tile grid (skips procedural generation)."""
+        obj = object.__new__(cls)
+        obj.cols = cols
+        obj.rows = rows
+        obj.tiles = [list(row) for row in tiles]
+        obj.blocked = set()
+        obj._load_sprites()
+        return obj
 
     # ------------------------------------------------------------------
     # Asset loading

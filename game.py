@@ -1,8 +1,9 @@
+import json
 import math
 import random
 import pygame
 from camera import Camera
-from map import TileMap, TILE_SIZE, GRASS
+from map import TileMap, TILE_SIZE
 from entities.archer import Archer
 from entities.lancer import Lancer
 from entities.warrior import Warrior
@@ -14,40 +15,43 @@ from entities.blueprint import Blueprint, BUILDABLE
 from systems.pathfinding import astar
 from hud import HUD
 
+_BUILDING_CLS = {
+    "Castle":   Castle,
+    "Archery":  Archery,
+    "Barracks": Barracks,
+    "House":    House,
+}
+_UNIT_CLS = {
+    "Archer":  Archer,
+    "Lancer":  Lancer,
+    "Warrior": Warrior,
+}
+
 DRAG_THRESHOLD = 5
 
 
 class Game:
-    MAP_COLS = 50
-    MAP_ROWS = 40
-
-    def __init__(self, screen: pygame.Surface):
+    def __init__(self, screen: pygame.Surface, scene_path: str):
         self.screen = screen
         self.w = screen.get_width()
         self.h = screen.get_height()
 
-        self.map = TileMap(self.MAP_COLS, self.MAP_ROWS)
-        self.camera = Camera(self.w, self.h)
-        self.camera.x = (self.map.pixel_width - self.w) / 2
-        self.camera.y = (self.map.pixel_height - self.h) / 2
-
         self.font = pygame.font.SysFont(None, 22)
         self.hud  = HUD(self.w, self.h)
 
-        self.units: list = []
-        self.pawns: list[Pawn] = []
-        self.arrows: list[Arrow] = []
-        self.buildings: list[Building] = []
-        self.blueprints: list[Blueprint] = []
-        self.resources: list = []
+        self.units:      list           = []
+        self.pawns:      list[Pawn]     = []
+        self.arrows:     list[Arrow]    = []
+        self.buildings:  list[Building] = []
+        self.blueprints: list[Blueprint]= []
+        self.resources:  list           = []
 
-        # Economy: resource counts per team
         self.economy: dict[str, dict[str, int]] = {
             "blue":  {"gold": 0, "wood": 0, "meat": 0, "pop": 0, "pop_cap": 0},
             "black": {"gold": 0, "wood": 0, "meat": 0, "pop": 0, "pop_cap": 0},
         }
 
-        self._spawn_world()
+        self._load_scene(scene_path)
 
         self._drag_start: tuple[int, int] | None = None
         self._dragging: bool = False
@@ -59,88 +63,48 @@ class Game:
     # Setup
     # ------------------------------------------------------------------
 
-    def _spawn_world(self):
-        cx = self.map.pixel_width // 2
-        cy = self.map.pixel_height // 2
+    def _center_camera(self):
+        self.camera = Camera(self.w, self.h)
+        self.camera.x = (self.map.pixel_width  - self.w) / 2
+        self.camera.y = (self.map.pixel_height - self.h) / 2
 
-        # --- Castles ---
-        blue_castle   = Castle(cx - 400, cy, team="blue")
-        black_castle  = Castle(cx + 400, cy, team="black")
-        blue_archery  = Archery(cx - 220, cy + 160, team="blue")
-        blue_barracks = Barracks(cx - 570, cy + 150, team="blue")
-        blue_houses = [
-            House(cx - 620, cy - 130, team="blue", variant=1),
-            House(cx - 490, cy - 160, team="blue", variant=2),
-            House(cx - 360, cy - 150, team="blue", variant=3),
-        ]
-        self.buildings = [blue_castle, black_castle, blue_archery, blue_barracks] + blue_houses
+    def _load_scene(self, path: str):
+        with open(path) as f:
+            scene = json.load(f)
 
-        for b in self.buildings:
-            self.map.clear_area(b.x, b.y, tile_radius=4)
-            b.on_place(self.map)
+        self.map = TileMap.from_data(scene["cols"], scene["rows"], scene["tiles"])
+        self._center_camera()
 
-        # --- Player combat units (spawned to the right of the blue castle) ---
-        for dx, dy in [(-100, -80), (-20, -80), (60, -80)]:
-            self.units.append(Archer(cx + dx, cy + dy, team="blue"))
-        for dx, dy in [(-60, 80), (20, 80)]:
-            self.units.append(Lancer(cx + dx, cy + dy, team="blue"))
-        for dx, dy in [(-20, 0), (60, 0)]:
-            self.units.append(Warrior(cx + dx, cy + dy, team="blue"))
+        for b_data in scene.get("buildings", []):
+            cls = _BUILDING_CLS.get(b_data["type"])
+            if cls is None:
+                continue
+            kw = {}
+            if b_data["type"] == "House":
+                kw["variant"] = b_data.get("variant", 1)
+            building = cls(b_data["x"], b_data["y"], team=b_data["team"], **kw)
+            self.map.clear_area(building.x, building.y, tile_radius=4)
+            building.on_place(self.map)
+            self.buildings.append(building)
 
-        # --- Enemy combat units (spawned to the left of the black castle) ---
-        for dx, dy in [(100, -80), (20, -80), (-60, -80)]:
-            self.units.append(Archer(cx + dx, cy + dy, team="black"))
-        for dx, dy in [(60, 80), (-20, 80)]:
-            self.units.append(Lancer(cx + dx, cy + dy, team="black"))
-        for dx, dy in [(20, 0), (-60, 0)]:
-            self.units.append(Warrior(cx + dx, cy + dy, team="black"))
+        for u_data in scene.get("units", []):
+            x, y, team = u_data["x"], u_data["y"], u_data["team"]
+            if u_data["type"] == "Pawn":
+                self.pawns.append(Pawn(x, y, team=team))
+            else:
+                cls = _UNIT_CLS.get(u_data["type"])
+                if cls:
+                    self.units.append(cls(x, y, team=team))
 
-        # --- Player pawns (to the left of the blue castle, outside its footprint) ---
-        for dx, dy in [(-580, -60), (-620, 0), (-580, 60)]:
-            self.pawns.append(Pawn(cx + dx, cy + dy, team="blue"))
-
-        # --- Resource nodes (shared map, accessible to both sides) ---
-        rng = random.Random()
-        border = 5
-
-        def rand_grass_pos():
-            for _ in range(100):
-                col = rng.randint(border, self.MAP_COLS - border - 1)
-                row = rng.randint(border, self.MAP_ROWS - border - 1)
-                if self.map.is_walkable(col, row):
-                    return (
-                        col * TILE_SIZE + TILE_SIZE // 2,
-                        row * TILE_SIZE + TILE_SIZE // 2,
-                    )
-            return cx, cy
-
-        MIN_RESOURCE_DIST = 56.0
-
-        def spawn_clumps(num_clumps, clump_min, clump_max, radius, factory):
-            for _ in range(num_clumps):
-                cx, cy = rand_grass_pos()
-                count       = rng.randint(clump_min, clump_max)
-                start_angle = rng.uniform(0, 2 * math.pi)
-                spread      = count - 1  # resources surrounding the center
-                for i in range(count):
-                    if i == 0:
-                        x, y = cx, cy
-                    else:
-                        angle = start_angle + (i - 1) * (2 * math.pi / spread)
-                        dist  = rng.uniform(radius * 0.5, radius)
-                        x = cx + math.cos(angle) * dist
-                        y = cy + math.sin(angle) * dist
-                    col, row = int(x // TILE_SIZE), int(y // TILE_SIZE)
-                    if self.map.tile_at(col, row) != GRASS:
-                        continue
-                    if any(math.hypot(r.x - x, r.y - y) < MIN_RESOURCE_DIST
-                           for r in self.resources):
-                        continue
-                    self.resources.append(factory(x, y))
-
-        spawn_clumps(4, 1, 3, 90,  lambda x, y: GoldNode(x, y, variant=rng.randint(1, 6)))
-        spawn_clumps(6, 3, 5, 90,  lambda x, y: WoodNode(x, y, variant=rng.randint(0, 3)))
-        spawn_clumps(3, 2, 5, 80,  lambda x, y: MeatNode(x, y))
+        for r_data in scene.get("resources", []):
+            x, y, variant = r_data["x"], r_data["y"], r_data.get("variant", 0)
+            rtype = r_data["type"]
+            if rtype == "wood":
+                self.resources.append(WoodNode(x, y, variant=variant))
+            elif rtype == "gold":
+                self.resources.append(GoldNode(x, y, variant=variant))
+            elif rtype == "meat":
+                self.resources.append(MeatNode(x, y))
 
     # ------------------------------------------------------------------
     # Helpers

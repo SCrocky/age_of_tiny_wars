@@ -4,7 +4,7 @@ import pygame
 class Camera:
     PAN_SPEED = 500      # world pixels per second
     ZOOM_STEP = 0.1
-    MIN_ZOOM = 0.4
+    MIN_ZOOM = 0.05
     MAX_ZOOM = 3.0
     EDGE_SCROLL_MARGIN = 20  # px from screen edge that triggers scrolling
 
