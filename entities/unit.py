@@ -1,6 +1,5 @@
 import math
 import random
-import rendering.entity_renderer as entity_renderer
 from entities.entity import Entity
 from map import TILE_SIZE
 
@@ -111,16 +110,3 @@ class Unit(Entity):
         return abs(sx - ux) <= half and abs(sy - uy) <= half
 
     # ------------------------------------------------------------------
-    # Rendering (delegated to entity_renderer)
-    # ------------------------------------------------------------------
-
-    def _get_render_frame(self):
-        """Return (frame: pygame.Surface, flip_x: bool). Subclasses implement.
-        Called only from the renderer layer; removed when each subclass is ported."""
-        raise NotImplementedError
-
-    def _render_extra(self, surface, camera, sx: float, sy: float, size: int):
-        """Hook for subclass overlays. Called only from the renderer layer."""
-
-    def render(self, surface, camera):
-        entity_renderer.render_unit(self, surface, camera)
