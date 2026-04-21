@@ -1,15 +1,31 @@
 # Age of Wars
 
-A medieval top-down 2D real-time strategy game built with Python and Pygame.
+A medieval top-down 2D real-time strategy game built with Python and Pygame. Supports both single-player and 2-player LAN multiplayer.
 
 ---
 
 ## Getting Started
 
+### Single Player
+
 ```bash
-pip install pygame
+pip install pygame msgpack
 python main.py
 ```
+
+### Multiplayer (LAN)
+
+**On the host machine:**
+```bash
+python server_main.py --scene map_editor/maps/<scene>.json
+```
+
+**On each client (run twice, once per player):**
+```bash
+python client_main.py --host <server-ip> --port 9876
+```
+
+The first client to connect plays Blue; the second plays Black. The game starts automatically once both players are connected.
 
 The game auto-generates a procedural map on startup. Blue faction is player-controlled; Black is the opponent.
 
@@ -20,7 +36,7 @@ The game auto-generates a procedural map on startup. Blue faction is player-cont
 | Aspect | Decision |
 |---|---|
 | Perspective | Top-down 2D pixel art (chibi style) |
-| Scope | Player vs AI, full RTS economy + combat |
+| Scope | 1-player or 2-player LAN PvP, full RTS economy + combat |
 | Theme | Medieval |
 | Factions | Black, Blue, Purple color variants |
 | Resources | Gold, Wood, Meat |
@@ -74,6 +90,7 @@ The game auto-generates a procedural map on startup. Blue faction is player-cont
 | Arrow keys / edge scroll | Pan camera |
 | Mouse wheel | Zoom |
 | HUD buttons | Train units / construct buildings |
+| F3 | Toggle debug overlay (ping, tick) |
 
 ---
 
@@ -122,6 +139,27 @@ The game auto-generates a procedural map on startup. Blue faction is player-cont
 
 ---
 
+## Multiplayer Architecture
+
+Multiplayer uses a **dedicated authoritative server** model: the server runs the full simulation headlessly and broadcasts state snapshots to thin rendering clients.
+
+```
+server_main.py              client_main.py (×2)
+└─ GameServer               └─ ClientGame
+     ├─ game.py (auth sim)       ├─ camera.py (local pan/zoom)
+     │    └─ pathfinding.py      ├─ hud.py (player_team-aware)
+     └─ asyncio TCP :9876        ├─ rendering/ (fed EntityProxy)
+          └─ msgpack snapshots   └─ network/client.py
+```
+
+- **Protocol**: TCP with 4-byte big-endian length-prefix framing; msgpack serialization.
+- **Snapshots**: Full game state broadcast at 10 Hz; clients interpolate at 60 Hz.
+- **Commands**: Clients send `CMD_MOVE`, `CMD_ATTACK`, `CMD_GATHER`, `CMD_SPAWN`, `CMD_BUILD`; the server applies them authoritatively.
+- **Victory**: Game ends when either Castle is destroyed; both clients display the result.
+- **Disconnect**: Server pauses for up to 30 seconds to allow reconnection; if the player doesn't return, the remaining player wins.
+
+---
+
 ## Procedural Map Generation
 
 `map_editor/create_map.py` generates maps using a Wave Function Collapse zone algorithm:
@@ -140,8 +178,11 @@ The game auto-generates a procedural map on startup. Blue faction is player-cont
 
 ```
 age_of_wars/
-├── main.py               # Entry point, game loop
+├── main.py               # Single-player entry point
+├── server_main.py        # Dedicated server entry point
+├── client_main.py        # Multiplayer client entry point
 ├── game.py               # Central state: entities, input, update, render pipeline
+├── client_game.py        # Client-side rendering-only game (no simulation)
 ├── map.py                # Tile map, terrain, walkability, render cache
 ├── camera.py             # Viewport pan/zoom, world↔screen coordinate conversion
 ├── hud.py                # Resource bar, unit/building info panel, production buttons
@@ -157,6 +198,14 @@ age_of_wars/
 │   ├── resource.py       # GoldNode, WoodNode, MeatNode (sheep AI)
 │   ├── projectile.py     # Arrow: homing, snap-to-hit
 │   └── blueprint.py      # Building under construction, alpha-blended render
+├── network/
+│   ├── __init__.py
+│   ├── headless.py       # SDL dummy driver init for server-side pygame
+│   ├── lobby.py          # Waits for 2 TCP clients, assigns teams, fires GAME_START
+│   ├── server.py         # GameServer: authoritative simulation + snapshot broadcast
+│   ├── client.py         # Async TCP client with reconnect support
+│   ├── serialization.py  # msgpack encode/decode for snapshots and commands
+│   └── render_proxy.py   # EntityProxy duck-typed wrappers for client-side rendering
 ├── systems/
 │   └── pathfinding.py    # A* with octile heuristic, corner-cut prevention
 ├── map_editor/
@@ -204,5 +253,6 @@ assets/
 | 3 | Combat: selection box, attack commands, health bars, death | ✅ Done |
 | 4 | Economy: Pawn gathering, resource counters, Castle drop-off | ✅ Done |
 | 5 | Buildings: place/train from buildings, population cap | ✅ Done |
-| 6 | AI: opponent gathers, trains units, and attacks player | 🔲 Planned |
-| 7 | Polish: minimap, sounds, win/lose conditions | 🔲 Planned |
+| 6 | Multiplayer: 2-player LAN PvP via dedicated authoritative server | ✅ Done |
+| 7 | AI: opponent gathers, trains units, and attacks player | 🔲 Planned |
+| 8 | Polish: minimap, sounds | 🔲 Planned |
