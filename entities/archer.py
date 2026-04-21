@@ -14,6 +14,8 @@ _ARCHER_FRAME_COUNTS: dict[str, int] = {
 class Archer(Unit):
     """Ranged combat unit."""
 
+    VISION_RADIUS = 7
+
     FRAME_SIZE      = 192
     DISPLAY_SIZE    = 96
     SELECT_RADIUS   = 20

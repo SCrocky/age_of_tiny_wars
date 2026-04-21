@@ -100,6 +100,7 @@ class Castle(Building):
     is_depot         = True
     pop_bonus        = 10
     HEALTH_BAR_WIDTH = 80
+    VISION_RADIUS    = 8
 
     def __init__(self, x: float, y: float, team: str):
         super().__init__(x, y, team, max_hp=500)

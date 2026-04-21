@@ -20,6 +20,7 @@ from rendering.map_renderer import MapRenderer
 from rendering.hud_renderer import HUD
 import rendering.entity_renderer as entity_renderer
 from network.render_proxy import EntityProxy, make_proxy
+from systems.fog import FogOfWar
 
 DRAG_THRESHOLD = 5
 
@@ -35,6 +36,7 @@ class ClientGame:
         self.camera       = Camera(self.w, self.h)
         self.camera.x     = (self.map.pixel_width  - self.w) / 2
         self.camera.y     = (self.map.pixel_height - self.h) / 2
+        self._camera_on_castle = False  # snap to own castle on first snapshot
 
         self._map_renderer = MapRenderer()
         self.hud           = HUD(self.w, self.h)
@@ -71,6 +73,8 @@ class ClientGame:
         self._pending_build: str | None = None
         self.debug: bool = False
 
+        self.fog = FogOfWar(self.map.rows, self.map.cols)
+
         # Game-over overlay
         self._winner: str | None = None
 
@@ -78,6 +82,11 @@ class ClientGame:
         self._connected: bool = True
         self._rtt_ms: float | None = None
         self._show_debug: bool = False
+
+        # Cached fonts (avoid re-creating SysFont every frame)
+        self._font_hint  = pygame.font.SysFont(None, 28)
+        self._font_team  = pygame.font.SysFont(None, 22)
+        self._font_debug = pygame.font.SysFont(None, 20)
 
     # ------------------------------------------------------------------
     # Snapshot application
@@ -124,6 +133,18 @@ class ClientGame:
         # Remove entities that no longer exist
         for dead_id in set(self._proxies) - incoming_ids:
             del self._proxies[dead_id]
+
+        # On the first snapshot, snap the camera to the player's own castle
+        if not self._camera_on_castle:
+            for data in snap.get("entities", []):
+                if (data.get("type") == "Castle"
+                        and data.get("team") == self.player_team):
+                    cx = data["x"] - self.w / 2 / self.camera.zoom
+                    cy = data["y"] - self.h / 2 / self.camera.zoom
+                    self.camera.x = cx
+                    self.camera.y = cy
+                    self._camera_on_castle = True
+                    break
 
         # Rebuild typed render lists
         self._buildings.clear()
@@ -263,6 +284,10 @@ class ClientGame:
         )
         self.camera.update(dt, self.map.pixel_width, self.map.pixel_height, inp)
 
+        friendly = [e for e in self._units + self._pawns + self._buildings
+                    if e.team == self.player_team]
+        self.fog.update(friendly, TILE_SIZE)
+
     # ------------------------------------------------------------------
     # Click handlers
     # ------------------------------------------------------------------
@@ -317,7 +342,7 @@ class ClientGame:
 
         # Attack enemy
         enemy = next(
-            (e for e in self._units + self._buildings
+            (e for e in self._units + self._pawns + self._buildings
              if e.team != self.player_team and e.hit_test(sx, sy, self.camera)),
             None,
         )
@@ -388,6 +413,16 @@ class ClientGame:
     # Rendering
     # ------------------------------------------------------------------
 
+    def _fog_visible(self, obj) -> bool:
+        team = getattr(obj, "team", None)
+        if team == self.player_team:
+            return True
+        t = type(obj).__name__
+        if t in ("Castle", "Archery", "Barracks", "House", "Blueprint",
+                 "GoldNode", "WoodNode"):
+            return self.fog.is_explored(obj.x, obj.y, TILE_SIZE)
+        return self.fog.is_visible(obj.x, obj.y, TILE_SIZE)
+
     def render(self):
         self.screen.fill((10, 20, 40))
         self._map_renderer.render(self.map, self.screen, self.camera)
@@ -399,11 +434,12 @@ class ClientGame:
         vx1 = cam.x + self.w / cam.zoom + margin
         vy1 = cam.y + self.h / cam.zoom + margin
 
-        # Collect visible world objects and Y-sort
+        # Collect visible world objects, filtered by fog, then Y-sort
         world_objects = [
             obj for obj in
             self._resources + self._blueprints + self._buildings + self._units + self._pawns
             if vx0 <= obj.x <= vx1 and vy0 <= obj.y <= vy1
+            and self._fog_visible(obj)
         ]
         world_objects.sort(key=lambda obj: obj.sort_y)
 
@@ -428,14 +464,18 @@ class ClientGame:
                     entity_renderer.render_lancer(obj, self.screen, cam)
 
             for arrow in self._arrows:
-                entity_renderer.render_arrow(arrow, self.screen, cam)
+                if self.fog.is_visible(arrow.x, arrow.y, TILE_SIZE):
+                    entity_renderer.render_arrow(arrow, self.screen, cam)
         finally:
             self._restore_lerp()
 
+        friendly = [e for e in self._units + self._pawns + self._buildings
+                    if e.team == self.player_team]
+        self._map_renderer.render_fog(self.fog, self.map, self.screen, cam, friendly)
+
         # Pending build hint
         if self._pending_build:
-            font = pygame.font.SysFont(None, 28)
-            txt  = font.render(
+            txt = self._font_hint.render(
                 f"Right-click to place {self._pending_build}  (ESC to cancel)",
                 True, (255, 220, 80),
             )
@@ -449,9 +489,8 @@ class ClientGame:
         self.hud.draw(self.screen, self.economy, all_selectable, self.player_team)
 
         # Team indicator
-        col  = (80, 140, 255) if self.player_team == "blue" else (60, 60, 60)
-        font = pygame.font.SysFont(None, 22)
-        txt  = font.render(f"You: {self.player_team}", True, col)
+        col = (80, 140, 255) if self.player_team == "blue" else (60, 60, 60)
+        txt = self._font_team.render(f"You: {self.player_team}", True, col)
         self.screen.blit(txt, (self.w - txt.get_width() - 10, 10))
 
         # Disconnect overlay
@@ -460,8 +499,7 @@ class ClientGame:
 
         # Debug overlay (F3)
         if self._show_debug and self._rtt_ms is not None:
-            font = pygame.font.SysFont(None, 20)
-            rtt = font.render(f"RTT: {self._rtt_ms:.0f}ms", True, (200, 200, 200))
+            rtt = self._font_debug.render(f"RTT: {self._rtt_ms:.0f}ms", True, (200, 200, 200))
             self.screen.blit(rtt, (self.w - rtt.get_width() - 10, 30))
 
         # Game-over overlay

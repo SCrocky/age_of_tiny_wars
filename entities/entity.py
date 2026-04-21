@@ -1,6 +1,8 @@
 class Entity:
     """Base class for all game objects with a world position and health."""
 
+    VISION_RADIUS = 5  # tiles
+
     def __init__(self, x: float, y: float, team: str, max_hp: int = 100):
         self.entity_id: int = 0
         self.x = x          # world-space centre

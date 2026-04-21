@@ -13,6 +13,7 @@ from entities.resource import GoldNode, WoodNode, MeatNode
 from entities.projectile import Arrow
 from entities.blueprint import Blueprint, BUILDABLE
 from systems.pathfinding import astar
+from systems.fog import FogOfWar
 from rendering.hud_renderer import HUD
 import rendering.entity_renderer as entity_renderer
 from rendering.map_renderer import MapRenderer
@@ -57,6 +58,7 @@ class Game:
         self.headless: bool = headless
         self._next_entity_id: int = 1
         self._load_scene(scene_path)
+        self.fog = FogOfWar(self.map.rows, self.map.cols)
 
         self._drag_start: tuple[int, int] | None = None
         self._dragging: bool = False
@@ -326,7 +328,7 @@ class Game:
         enemy = next(
             (
                 e
-                for e in self.units + self.buildings
+                for e in self.units + self.pawns + self.buildings
                 if e.team != "blue" and e.hit_test(sx, sy, self.camera)
             ),
             None,
@@ -376,6 +378,17 @@ class Game:
                             return offsets
             ring += 1
         return offsets[:count]
+
+    def _fog_visible(self, obj) -> bool:
+        """Return True if obj should be rendered given current fog state."""
+        team = getattr(obj, "team", None)
+        if team == "blue":
+            return True
+        # Static objects (buildings, blueprints, resources): show once explored
+        if isinstance(obj, (Building, Blueprint, GoldNode, WoodNode, MeatNode)):
+            return self.fog.is_explored(obj.x, obj.y, TILE_SIZE)
+        # Enemy mobile units: only when currently visible
+        return self.fog.is_visible(obj.x, obj.y, TILE_SIZE)
 
     # ------------------------------------------------------------------
     # Update
@@ -449,6 +462,10 @@ class Game:
         self.arrows = [a for a in self.arrows if a.alive]
         self._recalc_pop()
 
+        if not self.headless:
+            friendly = [e for e in self.units + self.pawns + self.buildings if e.team == "blue"]
+            self.fog.update(friendly, TILE_SIZE)
+
     def _apply_building_collision(self):
         for unit in self.units + self.pawns:
             r = unit.DISPLAY_SIZE / 4
@@ -509,6 +526,7 @@ class Game:
             obj for obj in
             self.resources + self.blueprints + self.buildings + self.units + self.pawns
             if vx0 <= obj.x <= vx1 and vy0 <= obj.y <= vy1
+            and self._fog_visible(obj)
         ]
         world_objects.sort(key=lambda obj: obj.sort_y)
         for obj in world_objects:
@@ -522,7 +540,11 @@ class Game:
                 obj.render(self.screen, self.camera)
 
         for arrow in self.arrows:
-            entity_renderer.render_arrow(arrow, self.screen, self.camera)
+            if self.fog.is_visible(arrow.x, arrow.y, TILE_SIZE):
+                entity_renderer.render_arrow(arrow, self.screen, self.camera)
+
+        friendly = [e for e in self.units + self.pawns + self.buildings if e.team == "blue"]
+        self._map_renderer.render_fog(self.fog, self.map, self.screen, self.camera, friendly)
 
         if self._pending_build:
             font = pygame.font.SysFont(None, 28)

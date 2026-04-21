@@ -54,17 +54,22 @@ class HUD:
     # ------------------------------------------------------------------
 
     def _load(self):
-        self._icons = {
+        raw_icons = {
             "gold": pygame.image.load(f"{_UI}/Icons/Icon_03.png").convert_alpha(),
             "wood": pygame.image.load(f"{_UI}/Icons/Icon_02.png").convert_alpha(),
             "meat": pygame.image.load(f"{_UI}/Icons/Icon_04.png").convert_alpha(),
             "pop":  pygame.image.load(f"{_UI}/Icons/Icon_05.png").convert_alpha(),
         }
+        # Pre-scale to the two sizes used at runtime so transform.scale isn't called per frame
+        s = self.ICON_SZ
+        self._icons    = {k: pygame.transform.scale(v, (s, s))   for k, v in raw_icons.items()}
+        self._icons_sm = {k: pygame.transform.scale(v, (14, 14)) for k, v in raw_icons.items()}
 
         # Panel background: stretch WoodTable_Slots.png to any size
         self._panel_bg = pygame.image.load(
             f"{_UI}/Wood Table/WoodTable_Slots.png"
         ).convert_alpha()
+        self._panel_cache: dict[tuple[int, int], pygame.Surface] = {}
 
         # HP bar: 3-part — caps at natural width, middle stretched
         base   = pygame.image.load(f"{_UI}/Bars/BigBar_Base.png").convert_alpha()
@@ -72,23 +77,31 @@ class HUD:
         cap    = bw // 3
         self._bar_h     = bh
         self._bar_cap   = cap
-        self._bar_left  = base.subsurface(pygame.Rect(0,       0, cap, bh))
-        self._bar_mid   = base.subsurface(pygame.Rect(cap,     0, cap, bh))
-        self._bar_right = base.subsurface(pygame.Rect(cap * 2, 0, cap, bh))
+        self._bar_left  = base.subsurface(pygame.Rect(0,       0, cap, bh)).copy()
+        self._bar_mid   = base.subsurface(pygame.Rect(cap,     0, cap, bh)).copy()
+        self._bar_right = base.subsurface(pygame.Rect(cap * 2, 0, cap, bh)).copy()
         self._bar_fill  = pygame.image.load(f"{_UI}/Bars/BigBar_Fill.png").convert_alpha()
         self._fill_h    = self._bar_fill.get_height()
 
-        self._btn_regular = pygame.image.load(
+        btn_reg_raw = pygame.image.load(
             f"{_UI}/Buttons/SmallBlueSquareButton_Regular.png"
         ).convert_alpha()
-        self._btn_pressed = pygame.image.load(
+        btn_prs_raw = pygame.image.load(
             f"{_UI}/Buttons/SmallBlueSquareButton_Pressed.png"
         ).convert_alpha()
+        # Pre-scale buttons to the fixed BUTTON_SIZE used at runtime
+        self._btn_regular = pygame.transform.scale(btn_reg_raw, (BUTTON_SIZE, BUTTON_SIZE))
+        self._btn_pressed = pygame.transform.scale(btn_prs_raw, (BUTTON_SIZE, BUTTON_SIZE))
+        self._btn_pressed.set_alpha(160)
 
-        self._build_icons: dict[str, pygame.Surface] = {
+        icon_size = int(BUTTON_SIZE * 0.55)
+        raw_build = {
             "Archery":  pygame.image.load("assets/Buildings/Blue Buildings/Archery.png").convert_alpha(),
             "Barracks": pygame.image.load("assets/Buildings/Blue Buildings/Barracks.png").convert_alpha(),
             "House":    pygame.image.load("assets/Buildings/Blue Buildings/House1.png").convert_alpha(),
+        }
+        self._build_icons: dict[str, pygame.Surface] = {
+            k: pygame.transform.scale(v, (icon_size, icon_size)) for k, v in raw_build.items()
         }
 
     def _get_avatar(self, n: int) -> pygame.Surface:
@@ -104,8 +117,10 @@ class HUD:
 
     def _draw_panel(self, surface: pygame.Surface, x: int, y: int, w: int, h: int,
                     corner: int | None = None):
-        scaled = pygame.transform.scale(self._panel_bg, (max(1, w), max(1, h)))
-        surface.blit(scaled, (int(x), int(y)))
+        key = (max(1, w), max(1, h))
+        if key not in self._panel_cache:
+            self._panel_cache[key] = pygame.transform.scale(self._panel_bg, key)
+        surface.blit(self._panel_cache[key], (int(x), int(y)))
 
     def _draw_hp_bar(self, surface: pygame.Surface, x: int, y: int, w: int,
                      hp: int, max_hp: int):
@@ -135,30 +150,25 @@ class HUD:
                      icon: pygame.Surface, costs: dict[str, int],
                      affordable: bool, action: str):
         """Draw a square button with a unit icon and per-resource cost row."""
-        sprite   = self._btn_regular if affordable else self._btn_pressed
-        btn_surf = pygame.transform.scale(sprite, (rect.w, rect.h))
-        if not affordable:
-            btn_surf.set_alpha(160)
-        surface.blit(btn_surf, rect.topleft)
+        # Buttons are always BUTTON_SIZE; pre-scaled sprites are used directly
+        surface.blit(self._btn_regular if affordable else self._btn_pressed, rect.topleft)
 
-        # Unit icon (upper area)
-        icon_size   = int(rect.w * 0.55)
-        icon_scaled = pygame.transform.scale(icon, (icon_size, icon_size))
-        surface.blit(icon_scaled, (
+        # Unit icon (upper area) — already pre-scaled to int(BUTTON_SIZE * 0.55)
+        icon_size = icon.get_width()
+        surface.blit(icon, (
             rect.x + (rect.w - icon_size) // 2,
             rect.y + 4,
         ))
 
         # Cost row — small resource icon + number per entry
-        col   = (255, 235, 180) if affordable else (160, 120, 100)
-        items = list(costs.items())
-        item_w = 14 + 2 + self._font.size("99")[0] + 4   # approx width per item
+        col    = (255, 235, 180) if affordable else (160, 120, 100)
+        items  = list(costs.items())
+        item_w = 14 + 2 + self._font.size("99")[0] + 4
         row_w  = len(items) * item_w - 4
         cx     = rect.x + (rect.w - row_w) // 2
         cy     = rect.bottom - 16
         for res, amount in items:
-            res_icon = pygame.transform.scale(self._icons[res], (14, 14))
-            surface.blit(res_icon, (cx, cy))
+            surface.blit(self._icons_sm[res], (cx, cy))
             num = self._font.render(str(amount), True, col)
             surface.blit(num, (cx + 16, cy + 1))
             cx += item_w
@@ -198,17 +208,15 @@ class HUD:
         ph    = row_h * 4 + c + pad
         self._draw_panel(surface, pad, pad, pw, ph)
         for i, key in enumerate(("gold", "wood", "meat")):
-            icon = pygame.transform.scale(self._icons[key], (s, s))
-            rx   = pad + c
-            ry   = pad + c + i * row_h
-            surface.blit(icon, (rx, ry))
-            txt  = self._font.render(str(eco[key]), True, (255, 235, 180))
+            rx  = pad + c
+            ry  = pad + c + i * row_h
+            surface.blit(self._icons[key], (rx, ry))
+            txt = self._font.render(str(eco[key]), True, (255, 235, 180))
             surface.blit(txt, (rx + s + 6, ry + (s - txt.get_height()) // 2))
         # Population row
-        icon = pygame.transform.scale(self._icons["pop"], (s, s))
-        rx   = pad + c
-        ry   = pad + c + 3 * row_h
-        surface.blit(icon, (rx, ry))
+        rx  = pad + c
+        ry  = pad + c + 3 * row_h
+        surface.blit(self._icons["pop"], (rx, ry))
         pop_txt = f"{eco.get('pop', 0)}/{eco.get('pop_cap', 0)}"
         col  = (200, 80, 80) if eco.get('pop', 0) >= eco.get('pop_cap', 1) else (255, 235, 180)
         txt  = self._font.render(pop_txt, True, col)
