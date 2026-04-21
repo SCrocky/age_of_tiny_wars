@@ -1,6 +1,6 @@
 from __future__ import annotations
 import pygame
-from render_cache import get_scaled
+from render_cache import get_scaled, get_scaled_rotated, get_font
 
 # ---------------------------------------------------------------------------
 # Surface caches — keyed by sprite_key string.
@@ -130,8 +130,7 @@ def render_arrow(arrow, surface: pygame.Surface, camera) -> None:
         return
     surf    = _load_arrow_surf(arrow.team)
     size    = max(1, int(_ARROW_DISPLAY_SIZE * camera.zoom))
-    scaled  = get_scaled(surf, size, size)
-    rotated = pygame.transform.rotate(scaled, arrow._angle)
+    rotated = get_scaled_rotated(surf, size, arrow._angle)
     sx, sy  = camera.world_to_screen(arrow.x, arrow.y)
     rect    = rotated.get_rect(center=(int(sx), int(sy)))
     surface.blit(rotated, rect)
@@ -300,7 +299,7 @@ def render_pawn(pawn, surface: pygame.Surface, camera) -> None:
         pygame.draw.circle(surface, (255, 220, 0), (int(sx), int(sy)), r, 2)
     draw_health_bar(pawn, surface, camera)
     if pawn._task == "to_depot" and pawn._carried > 0:
-        font  = pygame.font.SysFont(None, max(12, int(16 * camera.zoom)))
+        font  = get_font(max(12, int(16 * camera.zoom)))
         label = font.render(str(int(pawn._carried)), True, (255, 255, 180))
         surface.blit(label, (int(sx), int(sy - size / 2 - 14 * camera.zoom)))
 
