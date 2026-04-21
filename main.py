@@ -42,11 +42,16 @@ def _generate_scene() -> str:
 
 
 def main():
-    scene_path = _generate_scene()
-
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN)
     pygame.display.set_caption("Age of Wars")
+
+    import start_menu
+    if not start_menu.run(screen):
+        pygame.quit()
+        return
+
+    scene_path = _generate_scene()
     clock = pygame.time.Clock()
 
     game = Game(screen, scene_path=scene_path)
