@@ -2,6 +2,7 @@ from __future__ import annotations
 import math
 import pygame
 from map import TILE_SIZE, WATER, GRASS
+import assets
 
 
 class MapRenderer:
@@ -33,11 +34,11 @@ class MapRenderer:
     # ------------------------------------------------------------------
 
     def _load_sprites(self) -> None:
-        self._water_tile = pygame.image.load(
+        self._water_tile = assets.load_image(
             "assets/Terrain/Tileset/Water Background color.png"
         ).convert_alpha()
 
-        sheet = pygame.image.load(
+        sheet = assets.load_image(
             "assets/Terrain/Tileset/Tilemap_color1.png"
         ).convert_alpha()
         self._sheet_tiles = []

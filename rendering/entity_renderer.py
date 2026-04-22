@@ -2,6 +2,7 @@ from __future__ import annotations
 import pygame
 from render_cache import get_scaled, get_scaled_rotated, get_font
 from entities.pawn import Task as PawnTask
+import assets
 
 # ---------------------------------------------------------------------------
 # Surface caches — keyed by sprite_key string.
@@ -30,7 +31,7 @@ def _load_building_surf(sprite_key: str) -> pygame.Surface:
         _, btype, team = sprite_key.split("/")
         filename = _BUILDING_FILENAMES[btype]
         path = f"assets/Buildings/{team.capitalize()} Buildings/{filename}"
-        surf = pygame.image.load(path).convert_alpha()
+        surf = assets.load_image(path).convert_alpha()
         _building_surfs[sprite_key] = surf
     return surf
 
@@ -121,7 +122,7 @@ def _load_arrow_surf(team: str) -> pygame.Surface:
     surf = _arrow_surfs.get(team)
     if surf is None:
         path = f"assets/Units/{team.capitalize()} Units/Archer/Arrow.png"
-        surf = pygame.image.load(path).convert_alpha()
+        surf = assets.load_image(path).convert_alpha()
         _arrow_surfs[team] = surf
     return surf
 
@@ -148,7 +149,7 @@ _sheep_frames: dict[str, list[pygame.Surface]] = {}   # anim name → frame list
 
 
 def _load_sheet(path: str, frame_w: int) -> list[pygame.Surface]:
-    sheet   = pygame.image.load(path).convert_alpha()
+    sheet   = assets.load_image(path).convert_alpha()
     frame_h = sheet.get_height()
     count   = sheet.get_width() // frame_w
     return [
@@ -181,7 +182,7 @@ def _get_wood_stump(sprite_key: str) -> pygame.Surface:
     stump = _wood_stumps.get(sprite_key)
     if stump is None:
         n     = sprite_key.split("/")[2]
-        stump = pygame.image.load(
+        stump = assets.load_image(
             f"assets/Terrain/Resources/Wood/Trees/Stump {n}.png"
         ).convert_alpha()
         _wood_stumps[sprite_key] = stump

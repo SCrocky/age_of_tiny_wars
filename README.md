@@ -75,6 +75,12 @@ The codebase is intentionally kept readable. There's no build step and no framew
 
 ---
 
+## Credits
+
+All in-game art is from the **[Tiny Swords (Free Pack)](https://pixelfrog-assets.itch.io/tiny-swords)** asset pack by **[Pixel Frog](https://pixelfrog-assets.itch.io/)**, released for free use. Thank you for making beautiful work freely available to the community.
+
+---
+
 ## Contributors
 
 A big thank you to everyone who has played, reported bugs, or sent a PR — you're what keeps this project alive.

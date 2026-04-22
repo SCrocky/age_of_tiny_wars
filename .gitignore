@@ -1,5 +1,6 @@
 __pycache__
 assets/*
+downloaded_assets/*
 map_editor/maps/
-profile.out
+*profile.out
 screenshots/

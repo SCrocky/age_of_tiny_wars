@@ -1,6 +1,7 @@
 import pygame
+import assets
 
-_UI = "assets/UI_Elements/UI Elements"
+_UI = "assets/UI Elements/UI Elements"
 
 _AVATAR_IDX: dict[tuple[str, str], int] = {
     ("Archer",   "blue"):  2,
@@ -55,10 +56,10 @@ class HUD:
 
     def _load(self):
         raw_icons = {
-            "gold": pygame.image.load(f"{_UI}/Icons/Icon_03.png").convert_alpha(),
-            "wood": pygame.image.load(f"{_UI}/Icons/Icon_02.png").convert_alpha(),
-            "meat": pygame.image.load(f"{_UI}/Icons/Icon_04.png").convert_alpha(),
-            "pop":  pygame.image.load(f"{_UI}/Icons/Icon_05.png").convert_alpha(),
+            "gold": assets.load_image(f"{_UI}/Icons/Icon_03.png").convert_alpha(),
+            "wood": assets.load_image(f"{_UI}/Icons/Icon_02.png").convert_alpha(),
+            "meat": assets.load_image(f"{_UI}/Icons/Icon_04.png").convert_alpha(),
+            "pop":  assets.load_image(f"{_UI}/Icons/Icon_05.png").convert_alpha(),
         }
         # Pre-scale to the two sizes used at runtime so transform.scale isn't called per frame
         s = self.ICON_SZ
@@ -66,13 +67,13 @@ class HUD:
         self._icons_sm = {k: pygame.transform.scale(v, (14, 14)) for k, v in raw_icons.items()}
 
         # Panel background: stretch WoodTable_Slots.png to any size
-        self._panel_bg = pygame.image.load(
+        self._panel_bg = assets.load_image(
             f"{_UI}/Wood Table/WoodTable_Slots.png"
         ).convert_alpha()
         self._panel_cache: dict[tuple[int, int], pygame.Surface] = {}
 
         # HP bar: 3-part — caps at natural width, middle stretched
-        base   = pygame.image.load(f"{_UI}/Bars/BigBar_Base.png").convert_alpha()
+        base   = assets.load_image(f"{_UI}/Bars/BigBar_Base.png").convert_alpha()
         bw, bh = base.get_size()
         cap    = bw // 3
         self._bar_h     = bh
@@ -80,13 +81,13 @@ class HUD:
         self._bar_left  = base.subsurface(pygame.Rect(0,       0, cap, bh)).copy()
         self._bar_mid   = base.subsurface(pygame.Rect(cap,     0, cap, bh)).copy()
         self._bar_right = base.subsurface(pygame.Rect(cap * 2, 0, cap, bh)).copy()
-        self._bar_fill  = pygame.image.load(f"{_UI}/Bars/BigBar_Fill.png").convert_alpha()
+        self._bar_fill  = assets.load_image(f"{_UI}/Bars/BigBar_Fill.png").convert_alpha()
         self._fill_h    = self._bar_fill.get_height()
 
-        btn_reg_raw = pygame.image.load(
+        btn_reg_raw = assets.load_image(
             f"{_UI}/Buttons/SmallBlueSquareButton_Regular.png"
         ).convert_alpha()
-        btn_prs_raw = pygame.image.load(
+        btn_prs_raw = assets.load_image(
             f"{_UI}/Buttons/SmallBlueSquareButton_Pressed.png"
         ).convert_alpha()
         # Pre-scale buttons to the fixed BUTTON_SIZE used at runtime
@@ -96,9 +97,9 @@ class HUD:
 
         icon_size = int(BUTTON_SIZE * 0.55)
         raw_build = {
-            "Archery":  pygame.image.load("assets/Buildings/Blue Buildings/Archery.png").convert_alpha(),
-            "Barracks": pygame.image.load("assets/Buildings/Blue Buildings/Barracks.png").convert_alpha(),
-            "House":    pygame.image.load("assets/Buildings/Blue Buildings/House1.png").convert_alpha(),
+            "Archery":  assets.load_image("assets/Buildings/Blue Buildings/Archery.png").convert_alpha(),
+            "Barracks": assets.load_image("assets/Buildings/Blue Buildings/Barracks.png").convert_alpha(),
+            "House":    assets.load_image("assets/Buildings/Blue Buildings/House1.png").convert_alpha(),
         }
         self._build_icons: dict[str, pygame.Surface] = {
             k: pygame.transform.scale(v, (icon_size, icon_size)) for k, v in raw_build.items()
@@ -106,7 +107,7 @@ class HUD:
 
     def _get_avatar(self, n: int) -> pygame.Surface:
         if n not in self._avatars:
-            self._avatars[n] = pygame.image.load(
+            self._avatars[n] = assets.load_image(
                 f"{_UI}/Human Avatars/Avatars_{n:02d}.png"
             ).convert_alpha()
         return self._avatars[n]
