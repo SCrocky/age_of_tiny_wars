@@ -75,12 +75,12 @@ class HUD:
         # HP bar: 3-part — caps at natural width, middle stretched
         base   = assets.load_image(f"{_UI}/Bars/BigBar_Base.png").convert_alpha()
         bw, bh = base.get_size()
-        cap    = bw // 3
+        cap    = bw // 5
         self._bar_h     = bh
         self._bar_cap   = cap
         self._bar_left  = base.subsurface(pygame.Rect(0,       0, cap, bh)).copy()
-        self._bar_mid   = base.subsurface(pygame.Rect(cap,     0, cap, bh)).copy()
-        self._bar_right = base.subsurface(pygame.Rect(cap * 2, 0, cap, bh)).copy()
+        self._bar_mid   = base.subsurface(pygame.Rect(cap*2,     0, cap, bh)).copy()
+        self._bar_right = base.subsurface(pygame.Rect(cap * 4, 0, cap, bh)).copy()
         self._bar_fill  = assets.load_image(f"{_UI}/Bars/BigBar_Fill.png").convert_alpha()
         self._fill_h    = self._bar_fill.get_height()
 
