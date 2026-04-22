@@ -149,7 +149,7 @@ class MapRenderer:
 
         # Rebuild the scaled explored surface only when the tile region or zoom changes.
         vp_key = (src_x, src_y, src_w, src_h, dst_w, dst_h)
-        if vp_key != self._explored_vp_key:
+        if vp_key != self._explored_vp_key and self._explored_tile_surf is not None:
             sub = self._explored_tile_surf.subsurface(
                 pygame.Rect(src_x, src_y, src_w, src_h)
             )
@@ -164,7 +164,7 @@ class MapRenderer:
         fog_surf = self._fog_surf
         fog_surf.fill((0, 0, 0, 255))   # default: fully opaque (unexplored/border)
         clip = pygame.Rect(dst_x, dst_y, dst_w, dst_h).clip(fog_surf.get_rect())
-        if clip.width > 0 and clip.height > 0:
+        if clip.width > 0 and clip.height > 0 and self._explored_vp_surf is not None:
             evp_sub = self._explored_vp_surf.subsurface(
                 pygame.Rect(clip.x - dst_x, clip.y - dst_y, clip.w, clip.h)
             )

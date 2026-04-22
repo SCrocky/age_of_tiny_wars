@@ -1,6 +1,7 @@
 from __future__ import annotations
 import pygame
 from render_cache import get_scaled, get_scaled_rotated, get_font
+from entities.pawn import Task as PawnTask
 
 # ---------------------------------------------------------------------------
 # Surface caches — keyed by sprite_key string.
@@ -302,7 +303,8 @@ def render_pawn(pawn, surface: pygame.Surface, camera) -> None:
         r = max(2, int(pawn.SELECT_RADIUS * camera.zoom))
         pygame.draw.circle(surface, (255, 220, 0), (int(sx), int(sy)), r, 2)
     draw_health_bar(pawn, surface, camera)
-    if pawn._task == "to_depot" and pawn._carried > 0:
+    task_val = pawn._task.value if isinstance(pawn._task, PawnTask) else pawn._task
+    if task_val == "to_depot" and pawn._carried > 0:
         font  = get_font(max(12, int(16 * camera.zoom)))
         label = font.render(str(int(pawn._carried)), True, (255, 255, 180))
         surface.blit(label, (int(sx), int(sy - size / 2 - 14 * camera.zoom)))

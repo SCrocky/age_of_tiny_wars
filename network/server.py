@@ -221,15 +221,8 @@ class GameServer:
     # ------------------------------------------------------------------
 
     def _do_spawn(self, unit_type: str, building, team: str):
-        handlers = {
-            "Archer":  self.game._handle_spawn_archer,
-            "Lancer":  self.game._handle_spawn_lancer,
-            "Warrior": self.game._handle_spawn_warrior,
-            "Pawn":    self.game._handle_spawn_pawn,
-        }
-        handler = handlers.get(unit_type)
-        if handler:
-            handler(team=team, building=building)
+        if unit_type in self.game._SPAWN_TABLE:
+            self.game._spawn_unit(unit_type, team=team, building=building)
 
     def _do_build(self, building_type: str, wx: float, wy: float, pawn_ids: set, team: str):
         from entities.blueprint import Blueprint, BUILDABLE

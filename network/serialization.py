@@ -125,9 +125,9 @@ def _serialize_entity(entity) -> dict:
 
     # Pawn-specific fields used by renderer
     if type_name == "Pawn":
-        base["pawn_task"]    = getattr(entity, "_task", "idle")
-        base["pawn_carried"] = getattr(entity, "_carried", 0)
-        base["pawn_state"]   = getattr(entity, "_state", "idle")
+        task = getattr(entity, "_task", None)
+        base["pawn_task"]     = task.value if hasattr(task, "value") else "idle"
+        base["pawn_carried"]  = getattr(entity, "_carried", 0)
         base["resource_type"] = getattr(entity, "_resource_type", None)
 
     return base

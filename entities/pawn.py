@@ -1,3 +1,4 @@
+import enum
 import math
 import rendering.entity_renderer as entity_renderer
 from entities.unit import Unit
@@ -31,6 +32,15 @@ _PAWN_FRAME_COUNTS: dict[str, int] = {
     "run_hammer":       6,
     "interact_hammer":  3,
 }
+
+
+class Task(enum.Enum):
+    IDLE        = "idle"
+    TO_RESOURCE = "to_resource"
+    GATHER      = "gather"
+    TO_DEPOT    = "to_depot"
+    TO_BUILD    = "to_build"
+    BUILD       = "build"
 
 
 def _nearest_walkable_south(col: int, row: int, tile_map) -> tuple[int, int]:
@@ -72,7 +82,7 @@ class Pawn(Unit):
     def __init__(self, x: float, y: float, team: str = "blue"):
         super().__init__(x, y, team, max_hp=50)
 
-        self._state:         str   = "idle"
+        self._task:          Task  = Task.IDLE
         self._anim_key:      str   = "idle"
         self._frame_idx:     int   = 0
         self._anim_timer:    float = 0.0
@@ -83,7 +93,6 @@ class Pawn(Unit):
         self._resource_type: str   = ""
         self._carried:       float = 0.0
         self._gather_timer:  float = 0.0
-        self._task:          str   = ""    # 'to_resource'|'gather'|'to_depot'|'to_build'|'build'
 
         # Build task
         self._blueprint = None
@@ -95,7 +104,7 @@ class Pawn(Unit):
     def assign_build(self, blueprint):
         """Assign this pawn to construct a blueprint."""
         self._blueprint     = blueprint
-        self._task          = "to_build"
+        self._task          = Task.TO_BUILD
         self._resource_node = None
         self.path           = []
 
@@ -105,7 +114,7 @@ class Pawn(Unit):
         self._buildings      = tuple(buildings)
         self._resource_type  = resource_node.resource_type
         self._carried        = 0.0
-        self._task           = "to_resource"
+        self._task           = Task.TO_RESOURCE
         self.path            = []
 
     # ------------------------------------------------------------------
@@ -113,93 +122,91 @@ class Pawn(Unit):
     # ------------------------------------------------------------------
 
     def update(self, dt: float, tile_map=None) -> dict:
-        deposit = {}
-
-        if self._task == "to_resource":
-            self._state = "run_to"
-            if not self._resource_node or self._resource_node.depleted:
-                self._task  = ""
-                self._state = "idle"
-            else:
-                self._navigate_to(self._resource_node.x, self._resource_node.y,
-                                  dt, tile_map, arrive_radius=48.0)
-                dist = math.hypot(self._resource_node.x - self.x,
-                                  self._resource_node.y - self.y)
-                if dist <= 48.0:
-                    self._task         = "gather"
-                    self._gather_timer = 0.0
-
-        elif self._task == "gather":
-            self._state = "gather"
-            self.path   = []
-            if not self._resource_node or self._resource_node.depleted:
-                if self._carried > 0:
-                    self._task = "to_depot"
-                else:
-                    self._task  = ""
-                    self._state = "idle"
-            else:
-                self._gather_timer += dt
-                if self._gather_timer >= 1.0 / GATHER_RATE:
-                    amount = max(1, int(GATHER_RATE * dt))
-                else:
-                    amount = 0
-                gained = self._resource_node.gather(amount, gatherer=self)
-                if gained:
-                    self._gather_timer = 0.0
-                    self._carried = min(CARRY_MAX, self._carried + gained)
-                if self._carried >= CARRY_MAX:
-                    self._task = "to_depot"
-
-        elif self._task == "to_depot":
-            self._state = "run_return"
-            depot = self._nearest_depot()
-            if not depot:
-                self._task  = ""
-                self._state = "idle"
-            else:
-                tx, ty = depot.closest_point(self.x, self.y)
-                self._navigate_to(tx, ty, dt, tile_map, self.DEPOSIT_RADIUS)
-                if math.hypot(tx - self.x, ty - self.y) <= self.DEPOSIT_RADIUS:
-                    carried = int(self._carried)
-                    if carried > 0:
-                        deposit = {self._resource_type: carried}
-                    self._carried = 0.0
-                    self._task    = "to_resource"
-                    self.path     = []
-
-        elif self._task == "to_build":
-            self._state = "run_to_build"
-            if not self._blueprint or not self._blueprint.alive:
-                self._task  = ""
-                self._state = "idle"
-            else:
-                tx, ty = self._blueprint.closest_point(self.x, self.y)
-                self._navigate_to(tx, ty, dt, tile_map, INTERACT_RADIUS)
-                if math.hypot(tx - self.x, ty - self.y) <= INTERACT_RADIUS:
-                    self._task = "build"
-
-        elif self._task == "build":
-            self._state = "build"
-            self.path   = []
-            if not self._blueprint or not self._blueprint.alive:
-                self._task  = ""
-                self._state = "idle"
-            else:
-                dx = self._blueprint.x - self.x
-                if abs(dx) > 1:
-                    self._facing_right = dx > 0
-                from entities.blueprint import BUILD_RATE
-                self._blueprint.add_progress(BUILD_RATE * dt)
-
-        elif self.path:
-            self._state = "run"
-            self._move_along_path(dt)
+        _dispatch = {
+            Task.TO_RESOURCE: self._tick_to_resource,
+            Task.GATHER:      self._tick_gather,
+            Task.TO_DEPOT:    self._tick_to_depot,
+            Task.TO_BUILD:    self._tick_to_build,
+            Task.BUILD:       self._tick_build,
+        }
+        handler = _dispatch.get(self._task)
+        if handler:
+            deposit = handler(dt, tile_map)
         else:
-            self._state = "idle"
-
+            deposit = {}
+            if self.path:
+                self._move_along_path(dt)
         self._tick_animation(dt)
         return deposit
+
+    # ------------------------------------------------------------------
+    # Per-state tick methods
+    # ------------------------------------------------------------------
+
+    def _tick_to_resource(self, dt: float, tile_map) -> dict:
+        if not self._resource_node or self._resource_node.depleted:
+            self._task = Task.IDLE
+        else:
+            self._navigate_to(self._resource_node.x, self._resource_node.y,
+                              dt, tile_map, arrive_radius=48.0)
+            if math.hypot(self._resource_node.x - self.x,
+                          self._resource_node.y - self.y) <= 48.0:
+                self._task         = Task.GATHER
+                self._gather_timer = 0.0
+        return {}
+
+    def _tick_gather(self, dt: float, tile_map) -> dict:
+        self.path = []
+        if not self._resource_node or self._resource_node.depleted:
+            self._task = Task.TO_DEPOT if self._carried > 0 else Task.IDLE
+        else:
+            self._gather_timer += dt
+            amount = max(1, int(GATHER_RATE * dt)) if self._gather_timer >= 1.0 / GATHER_RATE else 0
+            gained = self._resource_node.gather(amount, gatherer=self)
+            if gained:
+                self._gather_timer = 0.0
+                self._carried = min(CARRY_MAX, self._carried + gained)
+            if self._carried >= CARRY_MAX:
+                self._task = Task.TO_DEPOT
+        return {}
+
+    def _tick_to_depot(self, dt: float, tile_map) -> dict:
+        depot = self._nearest_depot()
+        if not depot:
+            self._task = Task.IDLE
+            return {}
+        tx, ty = depot.closest_point(self.x, self.y)
+        self._navigate_to(tx, ty, dt, tile_map, self.DEPOSIT_RADIUS)
+        if math.hypot(tx - self.x, ty - self.y) <= self.DEPOSIT_RADIUS:
+            carried = int(self._carried)
+            deposit = {self._resource_type: carried} if carried > 0 else {}
+            self._carried = 0.0
+            self._task    = Task.TO_RESOURCE
+            self.path     = []
+            return deposit
+        return {}
+
+    def _tick_to_build(self, dt: float, tile_map) -> dict:
+        if not self._blueprint or not self._blueprint.alive:
+            self._task = Task.IDLE
+        else:
+            tx, ty = self._blueprint.closest_point(self.x, self.y)
+            self._navigate_to(tx, ty, dt, tile_map, INTERACT_RADIUS)
+            if math.hypot(tx - self.x, ty - self.y) <= INTERACT_RADIUS:
+                self._task = Task.BUILD
+        return {}
+
+    def _tick_build(self, dt: float, tile_map) -> dict:
+        self.path = []
+        if not self._blueprint or not self._blueprint.alive:
+            self._task = Task.IDLE
+        else:
+            dx = self._blueprint.x - self.x
+            if abs(dx) > 1:
+                self._facing_right = dx > 0
+            from entities.blueprint import BUILD_RATE
+            self._blueprint.add_progress(BUILD_RATE * dt)
+        return {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -242,18 +249,18 @@ class Pawn(Unit):
         self.path = astar(tile_map, (sc, sr), (gc, gr))
 
     def _current_anim_key(self) -> str:
-        if self._state == "run_to" and self._resource_type:
+        if self._task is Task.TO_RESOURCE and self._resource_type:
             tool, _ = _RESOURCE_TOOL[self._resource_type]
             return f"run_{tool}"
-        if self._state == "gather" and self._resource_type:
+        if self._task is Task.GATHER and self._resource_type:
             tool, _ = _RESOURCE_TOOL[self._resource_type]
             return f"interact_{tool}"
-        if self._state == "run_return" and self._resource_type:
+        if self._task is Task.TO_DEPOT and self._resource_type:
             _, ret = _RESOURCE_TOOL[self._resource_type]
             return f"run_{ret}"
-        if self._state == "run_to_build": return "run_hammer"
-        if self._state == "build":        return "interact_hammer"
-        if self._state == "run":          return "run"
+        if self._task is Task.TO_BUILD: return "run_hammer"
+        if self._task is Task.BUILD:    return "interact_hammer"
+        if self.path:                   return "run"
         return "idle"
 
     def _tick_animation(self, dt: float):

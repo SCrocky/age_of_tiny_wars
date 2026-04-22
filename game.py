@@ -7,7 +7,7 @@ from map import TileMap, TILE_SIZE
 from entities.archer import Archer
 from entities.lancer import Lancer
 from entities.warrior import Warrior
-from entities.pawn import Pawn
+from entities.pawn import Pawn, Task as PawnTask
 from entities.building import Building, Castle, Archery, Barracks, House
 from entities.resource import GoldNode, WoodNode, MeatNode
 from entities.projectile import Arrow
@@ -156,14 +156,8 @@ class Game:
                     self._handle_box_select(self._drag_start, event.pos)
                 else:
                     action = self.hud.handle_click(*event.pos)
-                    if action == "spawn_pawn":
-                        self._handle_spawn_pawn()
-                    elif action == "spawn_archer":
-                        self._handle_spawn_archer()
-                    elif action == "spawn_lancer":
-                        self._handle_spawn_lancer()
-                    elif action == "spawn_warrior":
-                        self._handle_spawn_warrior()
+                    if action and action.startswith("spawn_"):
+                        self._spawn_unit(action[6:].capitalize())
                     elif action and action.startswith("build_"):
                         name = action[6:]
                         self._pending_build = name[0].upper() + name[1:]
@@ -217,83 +211,39 @@ class Game:
             if x1 <= ux <= x2 and y1 <= uy <= y2:
                 u.selected = True
 
-    def _handle_spawn_archer(self, team: str = "blue", building=None):
-        eco = self.economy[team]
-        if eco["wood"] < 15 or eco["meat"] < 30 or eco["pop"] >= eco["pop_cap"]:
-            return
-        archery = building or next(
-            (b for b in self.buildings if b.team == team
-             and b.selected and b.alive and isinstance(b, Archery)),
-            None,
-        )
-        if archery is None:
-            return
-        eco["wood"] -= 15
-        eco["meat"] -= 30
-        angle = random.uniform(0, 2 * math.pi)
-        self.units.append(self._assign_id(Archer(
-            archery.x + math.cos(angle) * 120,
-            archery.y + math.sin(angle) * 120,
-            team=team,
-        )))
+    # unit_type -> (unit_class, cost_dict, required_building_class_or_None)
+    _SPAWN_TABLE = {
+        "Pawn":    (Pawn,    {"meat": 20},                None),
+        "Archer":  (Archer,  {"wood": 15, "meat": 30},    Archery),
+        "Lancer":  (Lancer,  {"wood": 45, "meat": 10},    Barracks),
+        "Warrior": (Warrior, {"gold": 35, "meat": 40},    Barracks),
+    }
 
-    def _handle_spawn_pawn(self, team: str = "blue", building=None):
+    def _spawn_unit(self, unit_type: str, team: str = "blue", building=None):
+        unit_cls, costs, building_cls = self._SPAWN_TABLE[unit_type]
         eco = self.economy[team]
-        if eco["meat"] < 20 or eco["pop"] >= eco["pop_cap"]:
+        if eco["pop"] >= eco["pop_cap"]:
             return
-        castle = building or next(
-            (b for b in self.buildings if b.team == team and b.selected and b.alive),
+        if any(eco.get(r, 0) < amt for r, amt in costs.items()):
+            return
+        spawn_building = building or next(
+            (b for b in self.buildings
+             if b.team == team and b.selected and b.alive
+             and (building_cls is None or isinstance(b, building_cls))),
             None,
         )
-        if castle is None:
+        if spawn_building is None:
             return
-        eco["meat"] -= 20
+        for r, amt in costs.items():
+            eco[r] -= amt
         angle = random.uniform(0, 2 * math.pi)
-        dist  = 120
-        px    = castle.x + math.cos(angle) * dist
-        py    = castle.y + math.sin(angle) * dist
-        pawn  = self._assign_id(Pawn(px, py, team=team))
-        self.pawns.append(pawn)
-
-    def _handle_spawn_lancer(self, team: str = "blue", building=None):
-        eco = self.economy[team]
-        if eco["wood"] < 45 or eco["meat"] < 10 or eco["pop"] >= eco["pop_cap"]:
-            return
-        barracks = building or next(
-            (b for b in self.buildings if b.team == team
-             and b.selected and b.alive and isinstance(b, Barracks)),
-            None,
-        )
-        if barracks is None:
-            return
-        eco["wood"] -= 45
-        eco["meat"] -= 10
-        angle = random.uniform(0, 2 * math.pi)
-        self.units.append(self._assign_id(Lancer(
-            barracks.x + math.cos(angle) * 120,
-            barracks.y + math.sin(angle) * 120,
+        unit = self._assign_id(unit_cls(
+            spawn_building.x + math.cos(angle) * 120,
+            spawn_building.y + math.sin(angle) * 120,
             team=team,
-        )))
+        ))
+        (self.pawns if unit_cls is Pawn else self.units).append(unit)
 
-    def _handle_spawn_warrior(self, team: str = "blue", building=None):
-        eco = self.economy[team]
-        if eco["gold"] < 35 or eco["meat"] < 40 or eco["pop"] >= eco["pop_cap"]:
-            return
-        barracks = building or next(
-            (b for b in self.buildings if b.team == team
-             and b.selected and b.alive and isinstance(b, Barracks)),
-            None,
-        )
-        if barracks is None:
-            return
-        eco["gold"] -= 35
-        eco["meat"] -= 40
-        angle = random.uniform(0, 2 * math.pi)
-        self.units.append(self._assign_id(Warrior(
-            barracks.x + math.cos(angle) * 120,
-            barracks.y + math.sin(angle) * 120,
-            team=team,
-        )))
 
     def _place_blueprint(self, screen_pos):
         name = self._pending_build
@@ -618,13 +568,13 @@ class Game:
             # Target position (resource or depot)
             target = None
             task = pawn._task
-            if task == "to_resource" and pawn._resource_node:
+            if task is PawnTask.TO_RESOURCE and pawn._resource_node:
                 target = (pawn._resource_node.x, pawn._resource_node.y)
                 color = (0, 220, 255)
-            elif task in ("gather",) and pawn._resource_node:
+            elif task is PawnTask.GATHER and pawn._resource_node:
                 target = (pawn._resource_node.x, pawn._resource_node.y)
                 color = (0, 255, 100)
-            elif task == "to_depot":
+            elif task is PawnTask.TO_DEPOT:
                 depot = pawn._nearest_depot()
                 if depot:
                     target = (depot.x, depot.y)
