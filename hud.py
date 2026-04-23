@@ -102,7 +102,7 @@ class HUD:
             "House":    assets.load_image("assets/Buildings/Blue Buildings/House1.png").convert_alpha(),
         }
         self._build_icons: dict[str, pygame.Surface] = {
-            k: pygame.transform.scale(v, (icon_size, icon_size)) for k, v in raw_build.items()
+            k: pygame.transform.scale(v, (icon_size/2, icon_size/2)) for k, v in raw_build.items()
         }
 
     def _get_avatar(self, n: int) -> pygame.Surface:
@@ -156,6 +156,7 @@ class HUD:
 
         # Unit icon (upper area) — already pre-scaled to int(BUTTON_SIZE * 0.55)
         icon_size = icon.get_width()
+
         surface.blit(icon, (
             rect.x + (rect.w - icon_size) // 2,
             rect.y + 4,
@@ -302,7 +303,7 @@ class HUD:
                 rect   = pygame.Rect(bx, by, BUTTON_SIZE, BUTTON_SIZE)
                 self._draw_button(
                     surface, rect,
-                    icon       = self._get_avatar(av_idx),
+                    icon       = pygame.transform.scale(self._get_avatar(av_idx), (BUTTON_SIZE, BUTTON_SIZE)),
                     costs      = costs,
                     affordable = self._can_afford(eco, costs),
                     action     = action,
