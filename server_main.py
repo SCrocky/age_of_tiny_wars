@@ -45,9 +45,31 @@ async def main(scene_path: str, host: str, port: int):
     from network.server import GameServer
 
     players = await wait_for_players(host, port, scene_path)
-    server = GameServer(scene_path)
+    server  = GameServer(scene_path)
     print("[server] Starting game…")
     await server.run(players)
+    print("[server] Game over.")
+
+
+async def main_solo(scene_path: str, host: str, port: int):
+    import json
+    from network.lobby import wait_for_one_player
+    from network.server import GameServer
+    from network.ai_player import AIPlayer
+
+    with open(scene_path) as f:
+        scene = json.load(f)
+
+    human  = await wait_for_one_player(host, port, scene_path)
+    ai     = AIPlayer("black", scene)
+    ai_task = asyncio.create_task(ai.run())
+
+    server  = GameServer(scene_path)
+    print("[server] Starting solo game…")
+    try:
+        await server.run([human, (ai.reader, ai.writer, ai.team)])
+    finally:
+        ai_task.cancel()
     print("[server] Game over.")
 
 
@@ -56,6 +78,8 @@ if __name__ == "__main__":
     parser.add_argument("--scene", default=None, help="Path to scene JSON")
     parser.add_argument("--host",  default="0.0.0.0")
     parser.add_argument("--port",  default=9876, type=int)
+    parser.add_argument("--solo",  action="store_true",
+                        help="Single-player mode: AI controls the black team")
     args = parser.parse_args()
 
     scene = args.scene
@@ -64,4 +88,7 @@ if __name__ == "__main__":
         scene = _generate_scene()
         print(f"[server] Scene: {scene}")
 
-    asyncio.run(main(scene, args.host, args.port))
+    if args.solo:
+        asyncio.run(main_solo(scene, args.host, args.port))
+    else:
+        asyncio.run(main(scene, args.host, args.port))

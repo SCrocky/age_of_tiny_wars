@@ -57,3 +57,41 @@ async def wait_for_players(host: str, port: int, scene_path: str):
 
     print("[lobby] GAME_START sent to both players.")
     return players
+
+
+async def wait_for_one_player(host: str, port: int, scene_path: str):
+    """
+    Solo mode: wait for a single human player (assigned 'blue') and return
+    their (reader, writer, team) tuple. The AI takes the remaining team.
+    """
+    player = None
+    ready  = asyncio.Event()
+
+    with open(scene_path) as f:
+        scene_json = json.dumps(json.load(f)).encode()
+
+    async def _handle(reader, writer):
+        nonlocal player
+        if player is not None:
+            writer.close()
+            return
+        player = (reader, writer, "blue")
+        print("[lobby] Human player connected → team=blue")
+        ready.set()
+
+    server = await asyncio.start_server(_handle, host, port)
+    addr   = server.sockets[0].getsockname()
+    print(f"[lobby] Listening on {addr[0]}:{addr[1]} — solo mode, waiting for 1 player…")
+
+    await ready.wait()
+    server.close()
+
+    reader, writer, team = player
+    msg    = msgpack.packb({"type": "GAME_START", "player_team": team,
+                             "scene_json": scene_json}, use_bin_type=True)
+    framed = struct.pack(">I", len(msg)) + msg
+    writer.write(framed)
+    await writer.drain()
+
+    print("[lobby] GAME_START sent to human player.")
+    return player
