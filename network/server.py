@@ -16,7 +16,8 @@ import time
 
 from game import Game
 from map import TILE_SIZE
-from entities.building import Castle
+from entities.building import Castle, Tower
+from entities.archer import Archer
 from systems.pathfinding import astar
 from network.serialization import serialize_snapshot, deserialize_command
 
@@ -217,6 +218,37 @@ class GameServer:
             wx = cmd.get("world_x", 0.0)
             wy = cmd.get("world_y", 0.0)
             self._do_build(building_type, wx, wy, pawn_ids, player_team)
+
+        elif kind == "CMD_GARRISON":
+            archer_ids = set(cmd.get("archer_ids", []))
+            tower_id   = cmd.get("tower_id")
+            tower = next(
+                (b for b in self.game.buildings
+                 if b.entity_id == tower_id and b.team == player_team
+                 and isinstance(b, Tower) and b.alive),
+                None,
+            )
+            if tower is None:
+                return
+            for u in list(self.game.units):
+                if u.entity_id in archer_ids and u.team == player_team and isinstance(u, Archer):
+                    if tower.garrison(u):
+                        self.game.units.remove(u)
+                    break  # one archer per tower
+
+        elif kind == "CMD_RELEASE":
+            tower_id = cmd.get("tower_id")
+            tower = next(
+                (b for b in self.game.buildings
+                 if b.entity_id == tower_id and b.team == player_team
+                 and isinstance(b, Tower) and b.alive),
+                None,
+            )
+            if tower is None:
+                return
+            archer = tower.release_archer()
+            if archer is not None:
+                self.game.units.append(archer)
 
         elif kind == "CMD_ASSIGN_BUILD":
             pawn_ids     = set(cmd.get("pawn_ids", []))

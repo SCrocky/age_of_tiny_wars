@@ -19,6 +19,7 @@ _BUILDING_FILENAMES: dict[str, str] = {
     "house1":   "House1.png",
     "house2":   "House2.png",
     "house3":   "House3.png",
+    "tower":    "Tower.png",
 }
 
 
@@ -86,6 +87,22 @@ def render_building(building, renderer: Renderer, camera) -> None:
         renderer.draw_color = (255, 220, 0, 255)
         renderer.draw_rect(pygame.Rect(int(sx - w / 2), int(sy - h / 2), w, h))
     draw_health_bar(building, renderer, camera, width=building.HEALTH_BAR_WIDTH)
+
+    if getattr(building, "garrisoned", False):
+        _render_garrisoned_archer(building, renderer, camera)
+
+
+def _render_garrisoned_archer(tower, renderer: Renderer, camera) -> None:
+    frames = _get_archer_frames(tower.team, tower.garrisoned_anim_key)
+    frame  = frames[tower.garrisoned_frame_idx % len(frames)]
+    size   = max(1, int(96 * camera.zoom))
+    sx, sy = camera.world_to_screen(tower.x, tower.y)
+    # Position the archer near the top of the tower sprite
+    sy    -= int(tower.DISPLAY_H * camera.zoom * 0.20)
+    get_texture(frame).draw(
+        dstrect=(int(sx - size / 2), int(sy - size / 2), size, size),
+        flip_x=not tower.garrisoned_facing_right,
+    )
 
 
 # ---------------------------------------------------------------------------

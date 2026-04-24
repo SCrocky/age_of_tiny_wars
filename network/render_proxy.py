@@ -29,6 +29,7 @@ _BUILDING_SPECS = {
     "Archery":  (192, 192, 140, 140, False, 0,  60),
     "Barracks": (192, 192, 140, 140, False, 0,  60),
     "House":    (128, 128, 90,  70,  True,  5,  50),
+    "Tower":    (128, 256, 80,  80,  False, 0,  50),
 }
 
 _RESOURCE_DISPLAY = {
@@ -97,6 +98,12 @@ class EntityProxy:
         # Arrow
         self._angle:       float = 0.0
 
+        # Tower garrison
+        self.garrisoned:              bool = False
+        self.garrisoned_anim_key:     str  = "idle"
+        self.garrisoned_frame_idx:    int  = 0
+        self.garrisoned_facing_right: bool = True
+
     @property
     def depleted(self) -> bool:
         return self.amount <= 0
@@ -159,6 +166,12 @@ class EntityProxy:
         # Arrow
         self._angle = data.get("angle", 0.0)
 
+        # Tower garrison
+        self.garrisoned              = data.get("garrisoned", False)
+        self.garrisoned_anim_key     = data.get("garrisoned_anim_key", "idle")
+        self.garrisoned_frame_idx    = data.get("garrisoned_frame_idx", 0)
+        self.garrisoned_facing_right = data.get("garrisoned_facing_right", True)
+
 
 class _BuildingSubProxy:
     """Minimal sub-object to satisfy render_blueprint's access to blueprint._building."""
@@ -218,6 +231,9 @@ for _n, (_dw, _dh, _cw, _ch, _dep, _pop, _hbw) in _BUILDING_SPECS.items():
 for _n, _ds in _RESOURCE_DISPLAY.items():
     _res_type = _n.replace("Node", "").lower()   # "gold", "wood", "meat"
     _PROXY_CLASSES[_n] = _make_resource_cls(_n, _ds, _res_type)
+
+# Tower needs extended vision radius for fog-of-war
+_PROXY_CLASSES["Tower"].VISION_RADIUS = 10
 
 # Blueprint and Arrow use the base class with generic defaults
 _PROXY_CLASSES["Blueprint"] = type("Blueprint", (EntityProxy,), {"SELECT_RADIUS": 96})

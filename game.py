@@ -6,7 +6,7 @@ from entities.archer import Archer
 from entities.lancer import Lancer
 from entities.warrior import Warrior
 from entities.pawn import Pawn
-from entities.building import Building, Castle, Archery, Barracks, House
+from entities.building import Building, Castle, Archery, Barracks, House, Tower
 from entities.resource import GoldNode, WoodNode, MeatNode
 from entities.projectile import Arrow
 from entities.blueprint import Blueprint
@@ -16,6 +16,7 @@ _BUILDING_CLS = {
     "Archery":  Archery,
     "Barracks": Barracks,
     "House":    House,
+    "Tower":    Tower,
 }
 _UNIT_CLS = {
     "Archer":  Archer,
@@ -34,7 +35,7 @@ class Game:
         self.resources:  list            = []
 
         self.economy: dict[str, dict[str, int]] = {
-            "blue":  {"gold": 60, "wood": 60, "meat": 60, "pop": 0, "pop_cap": 0},
+            "blue":  {"gold": 60, "wood": 600, "meat": 60, "pop": 0, "pop_cap": 0},
             "black": {"gold": 60, "wood": 60, "meat": 60, "pop": 0, "pop_cap": 0},
         }
 
@@ -107,6 +108,15 @@ class Game:
             for arrow in new_arrows:
                 self._assign_id(arrow)
             self.arrows.extend(new_arrows)
+
+        for building in self.buildings:
+            if isinstance(building, Tower) and building.garrisoned_archer is not None:
+                enemies = [e for e in self.units + self.pawns + self.buildings
+                           if e.team != building.team and getattr(e, "alive", True)]
+                new_arrows = building.update_garrison(dt, enemies, self.map)
+                for arrow in new_arrows:
+                    self._assign_id(arrow)
+                self.arrows.extend(new_arrows)
 
         for pawn in self.pawns:
             deposit = pawn.update(dt, self.map)

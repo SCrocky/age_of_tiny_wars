@@ -23,6 +23,7 @@ _AVATAR_IDX: dict[tuple[str, str], int] = {
     ("Castle",   "blue"):  5,
     ("Archery",  "blue"):  3,
     ("Barracks", "blue"):  1,
+    ("Tower",    "blue"):  3,   # archer avatar — tower is an archer platform
     ("Warrior",  "black"): 21,
     ("Lancer",   "black"): 22,
     ("Archer",   "black"): 23,
@@ -30,6 +31,7 @@ _AVATAR_IDX: dict[tuple[str, str], int] = {
     ("Castle",   "black"): 25,
     ("Archery",  "black"): 23,
     ("Barracks", "black"): 21,
+    ("Tower",    "black"): 23,
 }
 
 PAWN_COST    = {"meat": 20}
@@ -44,6 +46,7 @@ _PRODUCTION: dict[str, list[tuple[str, dict, str]]] = {
     "Archery":  [("Archer",  ARCHER_COST,  "spawn_archer")],
     "Barracks": [("Lancer",  LANCER_COST,  "spawn_lancer"),
                  ("Warrior", WARRIOR_COST, "spawn_warrior")],
+    "Tower":    [("Archer",  {},            "release_archer")],
 }
 
 
@@ -106,6 +109,7 @@ class HUD:
             "Archery":  assets.load_image("assets/Buildings/Blue Buildings/Archery.png"),
             "Barracks": assets.load_image("assets/Buildings/Blue Buildings/Barracks.png"),
             "House":    assets.load_image("assets/Buildings/Blue Buildings/House1.png"),
+            "Tower":    assets.load_image("assets/Buildings/Blue Buildings/Tower.png"),
         }
         self._build_icons: dict[str, pygame.Surface] = {
             k: pygame.transform.scale(v, (icon_size // 2, icon_size // 2))
@@ -319,11 +323,15 @@ class HUD:
                 av_idx2 = _AVATAR_IDX.get((unit_key, ent.team), 4)
                 bx      = start_x + i * (BUTTON_SIZE + pad)
                 rect    = pygame.Rect(bx, by, BUTTON_SIZE, BUTTON_SIZE)
+                if action == "release_archer":
+                    affordable = getattr(ent, "garrisoned", False)
+                else:
+                    affordable = self._can_afford(eco, costs)
                 self._draw_button(
                     renderer, rect,
                     icon       = self._get_btn_avatar(av_idx2),
                     costs      = costs,
-                    affordable = self._can_afford(eco, costs),
+                    affordable = affordable,
                     action     = action,
                 )
 

@@ -1,4 +1,4 @@
-from entities.building import Archery, Barracks, House
+from entities.building import Archery, Barracks, House, Tower
 
 BUILD_RATE = 30.0  # HP-equivalent progress per second per builder
 
@@ -7,6 +7,7 @@ BUILDABLE: dict[str, tuple[type, dict[str, int]]] = {
     "Archery":  (Archery,  {"wood": 30, "gold": 20}),
     "Barracks": (Barracks, {"wood": 50, "gold": 30}),
     "House":    (House,    {"wood": 20}),
+    "Tower":    (Tower,    {"wood": 100}),
 }
 
 

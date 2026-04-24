@@ -8,7 +8,8 @@ ARROW_HIT_RADIUS = 12.0   # world px — snap-to-hit distance
 class Arrow:
     """A projectile fired by an Archer at a target entity."""
 
-    def __init__(self, x: float, y: float, target, damage: int, team: str):
+    def __init__(self, x: float, y: float, target, damage: int, team: str,
+                 speed: float = ARROW_SPEED):
         self.entity_id: int = 0
         self.x      = x
         self.y      = y
@@ -16,6 +17,7 @@ class Arrow:
         self.damage = damage
         self.team   = team
         self.alive  = True
+        self._speed = speed
 
         dx = target.x - x
         dy = target.y - y
@@ -39,6 +41,6 @@ class Arrow:
             return
 
         self._angle = math.degrees(math.atan2(-dy, dx))
-        speed = ARROW_SPEED * dt
+        speed = self._speed * dt
         self.x += dx / dist * speed
         self.y += dy / dist * speed

@@ -144,7 +144,7 @@ class ClientGame:
 
         for proxy in self._proxies.values():
             t = type(proxy).__name__
-            if t in ("Castle", "Archery", "Barracks", "House"):
+            if t in ("Castle", "Archery", "Barracks", "House", "Tower"):
                 self._buildings.append(proxy)
             elif t == "Blueprint":
                 self._blueprints.append(proxy)
@@ -244,6 +244,8 @@ class ClientGame:
                         self._emit_spawn("Lancer")
                     elif action == "spawn_warrior":
                         self._emit_spawn("Warrior")
+                    elif action == "release_archer":
+                        self._emit_release()
                     elif action and action.startswith("build_"):
                         name = action[6:]
                         self._pending_build = name[0].upper() + name[1:]
@@ -329,6 +331,22 @@ class ClientGame:
         sel_units = [u for u in self._units if u.selected and u.team == self.player_team]
         sel_pawns = [p for p in self._pawns if p.selected and p.team == self.player_team]
 
+        # Garrison: right-click own Tower with selected Archers
+        sel_archers = [u for u in sel_units if type(u).__name__ == "Archer"]
+        own_tower = next(
+            (b for b in self._buildings
+             if type(b).__name__ == "Tower" and b.team == self.player_team
+             and b.hit_test(sx, sy, self.camera)),
+            None,
+        )
+        if own_tower and sel_archers:
+            self._cmd_queue.put({
+                "type":       "CMD_GARRISON",
+                "archer_ids": [a.entity_id for a in sel_archers],
+                "tower_id":   own_tower.entity_id,
+            })
+            return
+
         enemy = next(
             (e for e in self._units + self._pawns + self._buildings
              if e.team != self.player_team and e.hit_test(sx, sy, self.camera)),
@@ -392,6 +410,19 @@ class ClientGame:
             "unit_type":   unit_type,
         })
 
+    def _emit_release(self):
+        sel_tower = next(
+            (b for b in self._buildings
+             if b.selected and b.team == self.player_team
+             and type(b).__name__ == "Tower"),
+            None,
+        )
+        if sel_tower:
+            self._cmd_queue.put({
+                "type":     "CMD_RELEASE",
+                "tower_id": sel_tower.entity_id,
+            })
+
     def _emit_build(self, screen_pos):
         name = self._pending_build
         self._pending_build = None
@@ -416,7 +447,7 @@ class ClientGame:
         if team == self.player_team:
             return True
         t = type(obj).__name__
-        if t in ("Castle", "Archery", "Barracks", "House", "Blueprint",
+        if t in ("Castle", "Archery", "Barracks", "House", "Tower", "Blueprint",
                  "GoldNode", "WoodNode"):
             return self.fog.is_explored(obj.x, obj.y, TILE_SIZE)
         return self.fog.is_visible(obj.x, obj.y, TILE_SIZE)
@@ -452,7 +483,7 @@ class ClientGame:
         try:
             for obj in world_objects:
                 t = type(obj).__name__
-                if t in ("Castle", "Archery", "Barracks", "House"):
+                if t in ("Castle", "Archery", "Barracks", "House", "Tower"):
                     entity_renderer.render_building(obj, renderer, cam)
                 elif t == "Blueprint":
                     entity_renderer.render_blueprint(obj, renderer, cam)
