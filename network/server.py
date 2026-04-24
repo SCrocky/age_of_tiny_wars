@@ -199,7 +199,7 @@ class GameServer:
                 return
             for p in self.game.pawns:
                 if p.entity_id in ids and p.team == player_team:
-                    p.assign_gather(resource, self.game.buildings)
+                    p.assign_gather(resource, self.game.buildings, self.game.resources)
 
         elif kind == "CMD_SPAWN":
             building_id = cmd.get("building_id")
@@ -215,6 +215,17 @@ class GameServer:
             wx = cmd.get("world_x", 0.0)
             wy = cmd.get("world_y", 0.0)
             self._do_build(building_type, wx, wy, pawn_ids, player_team)
+
+        elif kind == "CMD_ASSIGN_BUILD":
+            pawn_ids     = set(cmd.get("pawn_ids", []))
+            blueprint_id = cmd.get("blueprint_id")
+            bp = next((b for b in self.game.blueprints
+                       if b.entity_id == blueprint_id and b.alive), None)
+            if bp is None:
+                return
+            for p in self.game.pawns:
+                if p.entity_id in pawn_ids and p.team == player_team:
+                    p.assign_build(bp, self.game.blueprints)
 
     # ------------------------------------------------------------------
     # Spawn helpers
@@ -241,7 +252,7 @@ class GameServer:
         self.game.blueprints.append(bp)
         for pawn in self.game.pawns:
             if pawn.entity_id in pawn_ids and pawn.team == team:
-                pawn.assign_build(bp)
+                pawn.assign_build(bp, self.game.blueprints)
 
     # ------------------------------------------------------------------
     # Entity lookup

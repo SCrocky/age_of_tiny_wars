@@ -220,7 +220,7 @@ for _n, _ds in _RESOURCE_DISPLAY.items():
     _PROXY_CLASSES[_n] = _make_resource_cls(_n, _ds, _res_type)
 
 # Blueprint and Arrow use the base class with generic defaults
-_PROXY_CLASSES["Blueprint"] = type("Blueprint", (EntityProxy,), {})
+_PROXY_CLASSES["Blueprint"] = type("Blueprint", (EntityProxy,), {"SELECT_RADIUS": 96})
 _PROXY_CLASSES["Arrow"]     = type("Arrow",     (EntityProxy,), {})
 
 

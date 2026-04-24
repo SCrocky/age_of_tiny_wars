@@ -118,6 +118,15 @@ class Unit(Entity):
     def sort_y(self) -> float:
         return self.y
 
+    def search_nearby_for(self, candidates, predicate, radius: float):
+        """Return the nearest candidate within radius satisfying predicate, or None."""
+        best, best_dist = None, radius
+        for obj in candidates:
+            d = math.hypot(obj.x - self.x, obj.y - self.y)
+            if d < best_dist and predicate(obj):
+                best, best_dist = obj, d
+        return best
+
     def hit_test(self, sx: float, sy: float, camera) -> bool:
         ux, uy = camera.world_to_screen(self.x, self.y)
         half = self.DISPLAY_SIZE * camera.zoom / 2

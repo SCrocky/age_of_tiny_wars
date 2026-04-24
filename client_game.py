@@ -355,6 +355,19 @@ class ClientGame:
             })
             return
 
+        blueprint = next(
+            (b for b in self._blueprints
+             if b.team == self.player_team and b.alive and b.hit_test(sx, sy, self.camera)),
+            None,
+        )
+        if blueprint and sel_pawns:
+            self._cmd_queue.put({
+                "type":         "CMD_ASSIGN_BUILD",
+                "pawn_ids":     [p.entity_id for p in sel_pawns],
+                "blueprint_id": blueprint.entity_id,
+            })
+            return
+
         goal_col = max(0, min(int(wx // TILE_SIZE), self.map.cols - 1))
         goal_row = max(0, min(int(wy // TILE_SIZE), self.map.rows - 1))
         all_sel = sel_units + sel_pawns
