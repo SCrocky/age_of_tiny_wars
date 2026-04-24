@@ -82,6 +82,7 @@ class GameServer:
             next_tick_time += dt
 
             if self._paused:
+                await asyncio.sleep(dt)
                 next_tick_time = time.monotonic()  # don't pile up ticks while paused
                 continue
 

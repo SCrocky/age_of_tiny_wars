@@ -1,12 +1,14 @@
 from __future__ import annotations
 import math
 import pygame
+from pygame._sdl2.video import Renderer, Texture
 from map import TILE_SIZE, WATER, GRASS
 import assets
+import texture_cache
 
 
 class MapRenderer:
-    """Owns the tile Surface cache and renders a TileMap to the screen."""
+    """Owns the tile texture and renders a TileMap to the screen via the GPU renderer."""
 
     _SHEET_COLS  = 9
     _SHEET_ROWS  = 6
@@ -14,33 +16,34 @@ class MapRenderer:
     _WATER_COLOR = (56, 120, 153)
 
     def __init__(self) -> None:
-        self._tile_cache:  pygame.Surface | None   = None
-        self._water_tile:  pygame.Surface | None   = None
-        self._sheet_tiles: list[pygame.Surface]    = []
+        self._tile_cache:  pygame.Surface | None = None
+        self._tile_tex:    Texture | None        = None   # GPU texture, rebuilt with tile cache
+        self._water_tile:  pygame.Surface | None = None
+        self._sheet_tiles: list[pygame.Surface]  = []
         self._loaded = False
-        self._vp_key:  tuple | None          = None
-        self._vp_surf: pygame.Surface | None = None
+
         self._fog_surf: pygame.Surface | None = None
-        _FOG_GRID = TILE_SIZE // 2   # footprint granularity: half a tile
+        self._fog_tex:  Texture | None        = None   # streaming texture for fog overlay
+
+        _FOG_GRID = TILE_SIZE // 2
         self._FOG_GRID = _FOG_GRID
-        # Footprints already drawn onto _explored_tile_surf — only new ones trigger a draw
         self._drawn_footprints: set[tuple[int, int, int]] = set()
-        # Tile-resolution surface (250×150px); updated incrementally, never fully rebuilt
         self._explored_tile_surf:  pygame.Surface | None = None
-        # Scaled viewport surface (rebuilt only when the tile region or zoom changes)
-        self._explored_vp_surf: pygame.Surface | None = None
-        self._explored_vp_key:  tuple | None = None
+        self._explored_vp_surf:    pygame.Surface | None = None
+        self._explored_vp_key:     tuple | None          = None
+
+        self._renderer: Renderer | None = None
 
     # ------------------------------------------------------------------
 
     def _load_sprites(self) -> None:
         self._water_tile = assets.load_image(
             "assets/Terrain/Tileset/Water Background color.png"
-        ).convert_alpha()
+        )
 
         sheet = assets.load_image(
             "assets/Terrain/Tileset/Tilemap_color1.png"
-        ).convert_alpha()
+        )
         self._sheet_tiles = []
         for row in range(self._SHEET_ROWS):
             for col in range(self._SHEET_COLS):
@@ -52,7 +55,7 @@ class MapRenderer:
         self._loaded = True
 
     def _build_tile_cache(self, tile_map) -> None:
-        """Pre-render all tiles into a full-resolution Surface (zoom=1.0)."""
+        """Pre-render all tiles into a Surface then upload as a GPU Texture."""
         surf = pygame.Surface((tile_map.pixel_width, tile_map.pixel_height))
         for row in range(tile_map.rows):
             for col in range(tile_map.cols):
@@ -61,16 +64,17 @@ class MapRenderer:
                 if tile_map.tiles[row][col] == WATER:
                     surf.blit(self._water_tile, (x, y))
                 else:
-                    # +1 to eliminate sub-pixel gaps when scaled
                     pygame.draw.rect(surf, self._GRASS_COLOR,
                                      (x, y, TILE_SIZE + 1, TILE_SIZE + 1))
-        self._tile_cache      = surf
+        self._tile_cache = surf
+        self._tile_tex   = Texture.from_surface(self._renderer, surf)
         tile_map._tiles_dirty = False
-        self._vp_key          = None  # invalidate viewport cache
 
     # ------------------------------------------------------------------
 
-    def render(self, tile_map, surface: pygame.Surface, camera) -> None:
+    def render(self, tile_map, renderer: Renderer, camera) -> None:
+        self._renderer = renderer
+
         if not self._loaded:
             self._load_sprites()
 
@@ -78,8 +82,8 @@ class MapRenderer:
             self._build_tile_cache(tile_map)
 
         zoom = camera.zoom
-        sw   = surface.get_width()
-        sh   = surface.get_height()
+        sw   = camera.screen_width
+        sh   = camera.screen_height
 
         src_x  = max(0, int(camera.x))
         src_y  = max(0, int(camera.y))
@@ -93,17 +97,16 @@ class MapRenderer:
         dst_w = max(1, int(src_w * zoom))
         dst_h = max(1, int(src_h * zoom))
 
-        vp_key = (src_x, src_y, src_w, src_h, dst_w, dst_h)
-        if vp_key != self._vp_key:
-            sub = self._tile_cache.subsurface((src_x, src_y, src_w, src_h))
-            self._vp_surf = pygame.transform.scale(sub, (dst_w, dst_h))
-            self._vp_key  = vp_key
-        surface.blit(self._vp_surf, (dst_x, dst_y))
+        # GPU handles the viewport crop + scale — no CPU transform.scale needed.
+        self._tile_tex.draw(
+            srcrect=(src_x, src_y, src_w, src_h),
+            dstrect=(dst_x, dst_y, dst_w, dst_h),
+        )
 
-    def render_fog(self, fog, tile_map, surface: pygame.Surface, camera,
+    def render_fog(self, fog, tile_map, renderer: Renderer, camera,
                    reveal_entities=()) -> None:
-        sw   = surface.get_width()
-        sh   = surface.get_height()
+        sw   = camera.screen_width
+        sh   = camera.screen_height
         zoom = camera.zoom
         ts   = TILE_SIZE
         G    = self._FOG_GRID
@@ -113,8 +116,7 @@ class MapRenderer:
         if self._fog_surf is None or self._fog_surf.get_size() != (sw, sh):
             self._fog_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
 
-        # Draw any newly-explored footprints directly onto the tile surface.
-        # The surface is never fully rebuilt — only new circles are added.
+        # Incrementally add newly-explored footprints to the tile-resolution surface.
         tile_surf_dirty = False
         for entity in reveal_entities:
             if not getattr(entity, "alive", True):
@@ -131,10 +133,8 @@ class MapRenderer:
                 self._drawn_footprints.add(fp)
                 tile_surf_dirty = True
         if tile_surf_dirty:
-            self._explored_vp_key = None  # invalidate viewport cache
+            self._explored_vp_key = None
 
-        # Tile indices covering the viewport (one extra on each side so sub-tile
-        # offset never exposes an un-rendered edge).
         src_x  = max(0, int(camera.x / ts))
         src_y  = max(0, int(camera.y / ts))
         src_x2 = min(cols, int(math.ceil((camera.x + sw / zoom) / ts)) + 1)
@@ -142,13 +142,11 @@ class MapRenderer:
         src_w  = max(1, src_x2 - src_x)
         src_h  = max(1, src_y2 - src_y)
 
-        # Screen-space position and size of that tile block — mirrors render().
-        dst_x = int((src_x * ts - camera.x) * zoom)   # ≤ 0 when camera is mid-tile
+        dst_x = int((src_x * ts - camera.x) * zoom)
         dst_y = int((src_y * ts - camera.y) * zoom)
         dst_w = max(1, int(src_w * ts * zoom))
         dst_h = max(1, int(src_h * ts * zoom))
 
-        # Rebuild the scaled explored surface only when the tile region or zoom changes.
         vp_key = (src_x, src_y, src_w, src_h, dst_w, dst_h)
         if vp_key != self._explored_vp_key and self._explored_tile_surf is not None:
             sub = self._explored_tile_surf.subsurface(
@@ -160,10 +158,8 @@ class MapRenderer:
             pygame.transform.scale(sub, (dst_w, dst_h), self._explored_vp_surf)
             self._explored_vp_key = vp_key
 
-        # Stamp the scaled surface into fog_surf at the correct sub-tile offset.
-        # transform.scale into a subsurface does a direct pixel write (no alpha-composite).
         fog_surf = self._fog_surf
-        fog_surf.fill((0, 0, 0, 255))   # default: fully opaque (unexplored/border)
+        fog_surf.fill((0, 0, 0, 255))
         clip = pygame.Rect(dst_x, dst_y, dst_w, dst_h).clip(fog_surf.get_rect())
         if clip.width > 0 and clip.height > 0 and self._explored_vp_surf is not None:
             evp_sub = self._explored_vp_surf.subsurface(
@@ -171,7 +167,6 @@ class MapRenderer:
             )
             pygame.transform.scale(evp_sub, (clip.w, clip.h), fog_surf.subsurface(clip))
 
-        # Punch transparent circles for currently visible entities
         for entity in reveal_entities:
             if not getattr(entity, "alive", True):
                 continue
@@ -179,4 +174,9 @@ class MapRenderer:
             radius = int(getattr(entity, "VISION_RADIUS", 5) * ts * zoom)
             pygame.draw.circle(fog_surf, (0, 0, 0, 0), (int(sx), int(sy)), radius)
 
-        surface.blit(fog_surf, (0, 0))
+        # Upload the CPU fog surface to a streaming GPU texture and draw it.
+        if self._fog_tex is None or self._fog_tex.width != sw or self._fog_tex.height != sh:
+            self._fog_tex = Texture(renderer, (sw, sh), streaming=True)
+            self._fog_tex.blend_mode = pygame.BLENDMODE_BLEND
+        self._fog_tex.update(self._fog_surf)
+        self._fog_tex.draw()

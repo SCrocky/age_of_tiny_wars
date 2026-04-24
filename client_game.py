@@ -8,82 +8,77 @@ All player actions (move, attack, spawn…) are encoded as command dicts
 placed in _cmd_queue; client_main.py drains this queue and sends them.
 """
 
-import json
 import queue
 import time
 
 import pygame
+from pygame._sdl2.video import Renderer
 
 from camera import Camera, InputSnapshot
 from map import TileMap, TILE_SIZE
 from rendering.map_renderer import MapRenderer
 from rendering.hud_renderer import HUD
+
 import rendering.entity_renderer as entity_renderer
+import texture_cache
 from network.render_proxy import EntityProxy, make_proxy
 from systems.fog import FogOfWar
+
 
 DRAG_THRESHOLD = 5
 
 
 class ClientGame:
-    def __init__(self, screen: pygame.Surface, scene: dict, player_team: str):
-        self.screen      = screen
-        self.w           = screen.get_width()
-        self.h           = screen.get_height()
+    def __init__(self, renderer: Renderer, scene: dict, player_team: str):
+        self.renderer    = renderer
+        self.w           = 1600
+        self.h           = 900
         self.player_team = player_team
 
         self.map          = TileMap.from_data(scene["cols"], scene["rows"], scene["tiles"])
         self.camera       = Camera(self.w, self.h)
         self.camera.x     = (self.map.pixel_width  - self.w) / 2
         self.camera.y     = (self.map.pixel_height - self.h) / 2
-        self._camera_on_castle = False  # snap to own castle on first snapshot
+        self._camera_on_castle = False
 
         self._map_renderer = MapRenderer()
         self.hud           = HUD(self.w, self.h)
 
-        # Proxy registry keyed by entity_id
         self._proxies: dict[int, EntityProxy] = {}
 
-        # Typed render lists (rebuilt each apply_snapshot call)
         self._buildings:  list[EntityProxy] = []
         self._blueprints: list[EntityProxy] = []
-        self._units:      list[EntityProxy] = []   # Archer, Warrior, Lancer
+        self._units:      list[EntityProxy] = []
         self._pawns:      list[EntityProxy] = []
         self._arrows:     list[EntityProxy] = []
         self._resources:  list[EntityProxy] = []
 
-        # Snapshot interpolation
         self._snap_prev:   dict | None = None
         self._snap_curr:   dict | None = None
         self._t_prev:      float = 0.0
         self._t_curr:      float = 0.0
 
-        # Latest economy (for HUD)
         self.economy: dict = {
             "blue":  {"gold": 0, "wood": 0, "meat": 0, "pop": 0, "pop_cap": 0},
             "black": {"gold": 0, "wood": 0, "meat": 0, "pop": 0, "pop_cap": 0},
         }
 
-        # Command queue — drained by client_main.py and sent to server
         self._cmd_queue: queue.Queue = queue.Queue()
 
-        # Input / selection state
         self._drag_start: tuple[int, int] | None = None
         self._dragging:   bool = False
         self._pending_build: str | None = None
+        self._current_mouse_pos: tuple[int, int] = (0, 0)
         self.debug: bool = False
 
         self.fog = FogOfWar(self.map.rows, self.map.cols)
 
-        # Game-over overlay
         self._winner: str | None = None
 
-        # Connection state
         self._connected: bool = True
         self._rtt_ms: float | None = None
         self._show_debug: bool = False
 
-        # Cached fonts (avoid re-creating SysFont every frame)
         self._font_hint  = pygame.font.SysFont(None, 28)
         self._font_team  = pygame.font.SysFont(None, 22)
         self._font_debug = pygame.font.SysFont(None, 20)
@@ -103,24 +98,20 @@ class ClientGame:
         elif msg_type == "RECONNECTED":
             self._connected = True
         elif msg_type == "PONG":
-            import time
             self._rtt_ms = (time.monotonic() - msg.get("client_time", 0)) * 1000
 
     def _apply_snapshot(self, snap: dict):
         now = time.monotonic()
 
-        # Slide the interpolation window
         self._snap_prev = self._snap_curr
         self._t_prev    = self._t_curr
         self._snap_curr = snap
         self._t_curr    = now
 
-        # Update economy
         eco = snap.get("economy")
         if eco:
             self.economy = eco
 
-        # Reconcile proxy registry
         incoming_ids = set()
         for data in snap.get("entities", []):
             eid = data["id"]
@@ -130,11 +121,9 @@ class ClientGame:
             else:
                 self._proxies[eid] = make_proxy(data)
 
-        # Remove entities that no longer exist
         for dead_id in set(self._proxies) - incoming_ids:
             del self._proxies[dead_id]
 
-        # On the first snapshot, snap the camera to the player's own castle
         if not self._camera_on_castle:
             for data in snap.get("entities", []):
                 if (data.get("type") == "Castle"
@@ -146,7 +135,6 @@ class ClientGame:
                     self._camera_on_castle = True
                     break
 
-        # Rebuild typed render lists
         self._buildings.clear()
         self._blueprints.clear()
         self._units.clear()
@@ -174,7 +162,6 @@ class ClientGame:
     # ------------------------------------------------------------------
 
     def _lerped_pos(self, proxy: EntityProxy) -> tuple[float, float]:
-        """Linearly interpolate between the last two snapshots."""
         if self._snap_prev is None or self._t_curr == self._t_prev:
             return proxy.x, proxy.y
 
@@ -198,7 +185,6 @@ class ClientGame:
         return px, py
 
     def _apply_lerp(self):
-        """Temporarily write interpolated positions into proxies before rendering."""
         self._lerp_stash: list[tuple[EntityProxy, float, float]] = []
         for lst in (self._units, self._pawns, self._arrows):
             for proxy in lst:
@@ -216,7 +202,10 @@ class ClientGame:
 
     def handle_event(self, event: pygame.event.Event):
         if self._winner:
-            return  # no input after game over
+            return
+
+        if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+            self._current_mouse_pos = event.pos
 
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
@@ -230,8 +219,9 @@ class ClientGame:
                 self._show_debug = not self._show_debug
 
         elif event.type == pygame.MOUSEWHEEL:
-            mx, my = pygame.mouse.get_pos()
+            mx, my = self._current_mouse_pos
             self.camera.zoom_at(mx, my, event.y)
+            self.hud.on_zoom_changed()
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
@@ -271,9 +261,8 @@ class ClientGame:
                     self._dragging = True
 
     def update(self, dt: float):
-        """Update camera pan/zoom (local only)."""
         keys = pygame.key.get_pressed()
-        mx, my = pygame.mouse.get_pos()
+        mx, my = self._current_mouse_pos
         inp = InputSnapshot(
             pan_left  = bool(keys[pygame.K_LEFT]),
             pan_right = bool(keys[pygame.K_RIGHT]),
@@ -340,7 +329,6 @@ class ClientGame:
         sel_units = [u for u in self._units if u.selected and u.team == self.player_team]
         sel_pawns = [p for p in self._pawns if p.selected and p.team == self.player_team]
 
-        # Attack enemy
         enemy = next(
             (e for e in self._units + self._pawns + self._buildings
              if e.team != self.player_team and e.hit_test(sx, sy, self.camera)),
@@ -354,7 +342,6 @@ class ClientGame:
             })
             return
 
-        # Gather resource
         resource = next(
             (r for r in self._resources
              if not r.depleted and r.hit_test(sx, sy, self.camera)),
@@ -368,7 +355,6 @@ class ClientGame:
             })
             return
 
-        # Move
         goal_col = max(0, min(int(wx // TILE_SIZE), self.map.cols - 1))
         goal_row = max(0, min(int(wy // TILE_SIZE), self.map.rows - 1))
         all_sel = sel_units + sel_pawns
@@ -381,7 +367,6 @@ class ClientGame:
             })
 
     def _emit_spawn(self, unit_type: str):
-        """Find the selected building of this player and emit a spawn command."""
         sel_building = next(
             (b for b in self._buildings if b.selected and b.team == self.player_team),
             None,
@@ -410,7 +395,7 @@ class ClientGame:
         })
 
     # ------------------------------------------------------------------
-    # Rendering
+    # Fog visibility
     # ------------------------------------------------------------------
 
     def _fog_visible(self, obj) -> bool:
@@ -423,18 +408,25 @@ class ClientGame:
             return self.fog.is_explored(obj.x, obj.y, TILE_SIZE)
         return self.fog.is_visible(obj.x, obj.y, TILE_SIZE)
 
-    def render(self):
-        self.screen.fill((10, 20, 40))
-        self._map_renderer.render(self.map, self.screen, self.camera)
+    # ------------------------------------------------------------------
+    # Rendering
+    # ------------------------------------------------------------------
 
-        cam    = self.camera
+    def render(self):
+        renderer = self.renderer
+        cam      = self.camera
+
+        renderer.draw_color = (10, 20, 40, 255)
+        renderer.clear()
+
+        self._map_renderer.render(self.map, renderer, cam)
+
         margin = 200
         vx0 = cam.x - margin
         vy0 = cam.y - margin
         vx1 = cam.x + self.w / cam.zoom + margin
         vy1 = cam.y + self.h / cam.zoom + margin
 
-        # Collect visible world objects, filtered by fog, then Y-sort
         world_objects = [
             obj for obj in
             self._resources + self._blueprints + self._buildings + self._units + self._pawns
@@ -443,100 +435,109 @@ class ClientGame:
         ]
         world_objects.sort(key=lambda obj: obj.sort_y)
 
-        # Apply interpolation for moving entities
         self._apply_lerp()
         try:
             for obj in world_objects:
                 t = type(obj).__name__
                 if t in ("Castle", "Archery", "Barracks", "House"):
-                    entity_renderer.render_building(obj, self.screen, cam)
+                    entity_renderer.render_building(obj, renderer, cam)
                 elif t == "Blueprint":
-                    entity_renderer.render_blueprint(obj, self.screen, cam)
+                    entity_renderer.render_blueprint(obj, renderer, cam)
                 elif t in ("GoldNode", "WoodNode", "MeatNode"):
-                    entity_renderer.render_resource(obj, self.screen, cam)
+                    entity_renderer.render_resource(obj, renderer, cam)
                 elif t == "Pawn":
-                    entity_renderer.render_pawn(obj, self.screen, cam)
+                    entity_renderer.render_pawn(obj, renderer, cam)
                 elif t == "Archer":
-                    entity_renderer.render_archer(obj, self.screen, cam)
+                    entity_renderer.render_archer(obj, renderer, cam)
                 elif t == "Warrior":
-                    entity_renderer.render_warrior(obj, self.screen, cam)
+                    entity_renderer.render_warrior(obj, renderer, cam)
                 elif t == "Lancer":
-                    entity_renderer.render_lancer(obj, self.screen, cam)
+                    entity_renderer.render_lancer(obj, renderer, cam)
 
             for arrow in self._arrows:
                 if self.fog.is_visible(arrow.x, arrow.y, TILE_SIZE):
-                    entity_renderer.render_arrow(arrow, self.screen, cam)
+                    entity_renderer.render_arrow(arrow, renderer, cam)
         finally:
             self._restore_lerp()
 
         friendly = [e for e in self._units + self._pawns + self._buildings
                     if e.team == self.player_team]
-        self._map_renderer.render_fog(self.fog, self.map, self.screen, cam, friendly)
+        self._map_renderer.render_fog(self.fog, self.map, renderer, cam, friendly)
 
-        # Pending build hint
         if self._pending_build:
-            txt = self._font_hint.render(
+            txt_surf = self._font_hint.render(
                 f"Right-click to place {self._pending_build}  (ESC to cancel)",
                 True, (255, 220, 80),
             )
-            self.screen.blit(txt, (self.w // 2 - txt.get_width() // 2, 56))
+            txt_tex = texture_cache.make_texture(txt_surf)
+            tw, th  = txt_surf.get_size()
+            txt_tex.draw(dstrect=(self.w // 2 - tw // 2, 56, tw, th))
 
-        # Drag box
         self._draw_drag_box()
 
-        # HUD — pass all selectable proxies
         all_selectable = self._units + self._pawns + self._buildings
-        self.hud.draw(self.screen, self.economy, all_selectable, self.player_team)
+        self.hud.draw(renderer, self.economy, all_selectable, self.player_team)
 
-        # Team indicator
         col = (80, 140, 255) if self.player_team == "blue" else (60, 60, 60)
-        txt = self._font_team.render(f"You: {self.player_team}", True, col)
-        self.screen.blit(txt, (self.w - txt.get_width() - 10, 10))
+        txt_surf = self._font_team.render(f"You: {self.player_team}", True, col)
+        txt_tex  = texture_cache.make_texture(txt_surf)
+        tw, th   = txt_surf.get_size()
+        txt_tex.draw(dstrect=(self.w - tw - 10, 10, tw, th))
 
-        # Disconnect overlay
         if not self._connected:
             self._draw_disconnect_overlay()
 
-        # Debug overlay (F3)
         if self._show_debug and self._rtt_ms is not None:
-            rtt = self._font_debug.render(f"RTT: {self._rtt_ms:.0f}ms", True, (200, 200, 200))
-            self.screen.blit(rtt, (self.w - rtt.get_width() - 10, 30))
+            rtt_surf = self._font_debug.render(f"RTT: {self._rtt_ms:.0f}ms", True, (200, 200, 200))
+            rtt_tex  = texture_cache.make_texture(rtt_surf)
+            tw, th   = rtt_surf.get_size()
+            rtt_tex.draw(dstrect=(self.w - tw - 10, 30, tw, th))
 
-        # Game-over overlay
         if self._winner:
             self._draw_winner()
 
     def _draw_drag_box(self):
         if not self._dragging or not self._drag_start:
             return
-        mx, my = pygame.mouse.get_pos()
-        x1 = min(self._drag_start[0], mx)
-        y1 = min(self._drag_start[1], my)
-        w  = abs(mx - self._drag_start[0])
-        h  = abs(my - self._drag_start[1])
+        mx, my = self._current_mouse_pos
+        sx, sy = self._drag_start
+        x1 = min(sx, mx)
+        y1 = min(sy, my)
+        w  = abs(mx - sx)
+        h  = abs(my - sy)
         if w < 2 or h < 2:
             return
-        box = pygame.Surface((w, h), pygame.SRCALPHA)
-        box.fill((100, 220, 100, 40))
-        self.screen.blit(box, (x1, y1))
-        pygame.draw.rect(self.screen, (100, 220, 100), (x1, y1, w, h), 1)
+        renderer = self.renderer
+        renderer.draw_blend_mode = pygame.BLENDMODE_BLEND
+        renderer.draw_color = (100, 220, 100, 40)
+        renderer.fill_rect(pygame.Rect(x1, y1, w, h))
+        renderer.draw_color = (100, 220, 100, 255)
+        renderer.draw_rect(pygame.Rect(x1, y1, w, h))
+        renderer.draw_blend_mode = pygame.BLENDMODE_NONE
 
     def _draw_disconnect_overlay(self):
-        overlay = pygame.Surface((self.w, 60), pygame.SRCALPHA)
-        overlay.fill((40, 0, 0, 180))
-        self.screen.blit(overlay, (0, self.h // 2 - 30))
-        font = pygame.font.SysFont(None, 36)
-        txt = font.render("Connection lost — reconnecting…", True, (255, 180, 80))
-        self.screen.blit(txt, (self.w // 2 - txt.get_width() // 2, self.h // 2 - txt.get_height() // 2))
+        renderer = self.renderer
+        renderer.draw_blend_mode = pygame.BLENDMODE_BLEND
+        renderer.draw_color = (40, 0, 0, 180)
+        renderer.fill_rect(pygame.Rect(0, self.h // 2 - 30, self.w, 60))
+        renderer.draw_blend_mode = pygame.BLENDMODE_NONE
+        font     = pygame.font.SysFont(None, 36)
+        txt_surf = font.render("Connection lost — reconnecting…", True, (255, 180, 80))
+        txt_tex  = texture_cache.make_texture(txt_surf)
+        tw, th   = txt_surf.get_size()
+        txt_tex.draw(dstrect=(self.w // 2 - tw // 2, self.h // 2 - th // 2, tw, th))
 
     def _draw_winner(self):
-        overlay = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 140))
-        self.screen.blit(overlay, (0, 0))
+        renderer = self.renderer
+        renderer.draw_blend_mode = pygame.BLENDMODE_BLEND
+        renderer.draw_color = (0, 0, 0, 140)
+        renderer.fill_rect(pygame.Rect(0, 0, self.w, self.h))
+        renderer.draw_blend_mode = pygame.BLENDMODE_NONE
         font = pygame.font.SysFont(None, 80)
         if self._winner == self.player_team:
-            txt = font.render("Victory!", True, (255, 220, 80))
+            txt_surf = font.render("Victory!", True, (255, 220, 80))
         else:
-            txt = font.render("Defeat", True, (200, 80, 80))
-        self.screen.blit(txt, (self.w // 2 - txt.get_width() // 2,
-                                self.h // 2 - txt.get_height() // 2))
+            txt_surf = font.render("Defeat", True, (200, 80, 80))
+        txt_tex = texture_cache.make_texture(txt_surf)
+        tw, th  = txt_surf.get_size()
+        txt_tex.draw(dstrect=(self.w // 2 - tw // 2, self.h // 2 - th // 2, tw, th))
