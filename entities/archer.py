@@ -7,7 +7,6 @@ class Archer(CombatUnit):
 
     VISION_RADIUS = 7
 
-    FRAME_SIZE      = 192
     DISPLAY_SIZE    = 96
     SELECT_RADIUS   = 20
     ATTACK_RANGE    = 200.0

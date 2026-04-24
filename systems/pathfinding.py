@@ -19,12 +19,6 @@ def _get_pool() -> ProcessPoolExecutor:
     return _pool
 
 
-def shutdown_path_pool() -> None:
-    global _pool
-    if _pool is not None:
-        _pool.shutdown(wait=False, cancel_futures=True)
-        _pool = None
-
 
 # ---------------------------------------------------------------------------
 # Standalone worker function (must be importable at module level for spawn)

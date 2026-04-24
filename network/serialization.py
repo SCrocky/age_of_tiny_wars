@@ -149,17 +149,9 @@ def serialize_snapshot(game, tick: int) -> bytes:
     return encode_frame(snapshot)
 
 
-def deserialize_snapshot(data: bytes) -> dict:
-    return decode_frame(data)
-
-
 # ---------------------------------------------------------------------------
 # Command serialization
 # ---------------------------------------------------------------------------
-
-def serialize_command(cmd: dict) -> bytes:
-    return encode_frame(cmd)
-
 
 def deserialize_command(data: bytes) -> dict:
     return decode_frame(data)

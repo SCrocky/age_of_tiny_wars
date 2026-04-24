@@ -116,8 +116,7 @@ class HUD:
     # Drawing helpers
     # ------------------------------------------------------------------
 
-    def _draw_panel(self, surface: pygame.Surface, x: int, y: int, w: int, h: int,
-                    corner: int | None = None):
+    def _draw_panel(self, surface: pygame.Surface, x: int, y: int, w: int, h: int):
         key = (max(1, w), max(1, h))
         if key not in self._panel_cache:
             self._panel_cache[key] = pygame.transform.scale(self._panel_bg, key)

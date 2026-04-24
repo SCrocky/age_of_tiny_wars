@@ -70,7 +70,7 @@ def _network_thread(host: str, port: int, inbox: queue.Queue, outbox: queue.Queu
                 backoff = min(backoff * 2, 30.0)
                 try:
                     client2 = GameClient()
-                    new_team, _ = await client2.connect(host, port)
+                    await client2.connect(host, port)
                     client = client2
                     backoff = 1.0
                     inbox.put({"type": "RECONNECTED"})

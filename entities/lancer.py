@@ -48,7 +48,6 @@ class Lancer(CombatUnit):
     Automatically plays a directional defence animation when struck by melee.
     """
 
-    FRAME_SIZE    = 320
     DISPLAY_SIZE  = 128
     SELECT_RADIUS = 22
     MOVE_SPEED    = 88.0

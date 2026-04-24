@@ -44,7 +44,6 @@ RECONNECT_TIMEOUT = 30.0  # seconds to wait for reconnect before forfeiting
 class GameServer:
     def __init__(self, scene_path: str):
         self.game = Game(scene_path)
-        self._scene_path: str = scene_path
         self._tick: int = 0
         self._command_queue: asyncio.Queue = asyncio.Queue()
         self._writers: dict[str, asyncio.StreamWriter] = {}

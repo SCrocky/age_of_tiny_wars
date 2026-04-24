@@ -72,7 +72,6 @@ class Pawn(Unit):
     Idle / plain run   : idle / run
     """
 
-    FRAME_SIZE      = 192
     DISPLAY_SIZE    = 80
     MOVE_SPEED      = 80.0
     DEPOSIT_RADIUS  = 60.0

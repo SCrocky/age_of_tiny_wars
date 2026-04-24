@@ -12,7 +12,6 @@ class Warrior(CombatUnit):
     its attack cooldown, taking only half damage from that hit.
     """
 
-    FRAME_SIZE    = 192
     DISPLAY_SIZE  = 128
     SELECT_RADIUS = 22
     MOVE_SPEED    = 80.0
