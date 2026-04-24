@@ -17,6 +17,7 @@ class Unit(Entity):
         super().__init__(x, y, team, max_hp)
         self.path: list[tuple[int, int]] = []
         self.attack_target = None
+        self._enemy_pool:  list = []
         self._time:           float = 0.0
         self._last_shot_time: float = 0.0
         self._chase_timer:    float = 0.0
@@ -37,10 +38,11 @@ class Unit(Entity):
         else:
             self._arrival_offset = (0.0, 0.0)
 
-    def set_attack_target(self, target):
-        self._path_future = None
+    def set_attack_target(self, target, enemy_pool=None):
+        self._path_future  = None
         self.attack_target = target
-        self.path = []
+        self._enemy_pool   = enemy_pool if enemy_pool is not None else []
+        self.path          = []
 
     # ------------------------------------------------------------------
     # Shared movement helpers

@@ -1,6 +1,7 @@
 from entities.unit import Unit
 
-ANIM_FPS = 8
+ANIM_FPS            = 8
+NEARBY_ENEMY_RADIUS = 320.0  # 5 tiles — auto-retarget range on kill
 
 
 class CombatUnit(Unit):
@@ -43,7 +44,11 @@ class CombatUnit(Unit):
         spawned = []
         if self.attack_target is not None:
             if not self.attack_target.alive:
-                self.attack_target = None
+                self.attack_target = self.search_nearby_for(
+                    self._enemy_pool,
+                    lambda e: e.alive and e.team != self.team,
+                    NEARBY_ENEMY_RADIUS,
+                )
             else:
                 if self._dist_to_target() <= self.attack_range:
                     self.path = []

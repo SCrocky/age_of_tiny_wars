@@ -187,9 +187,11 @@ class GameServer:
             target = self._find_entity(target_id)
             if target is None:
                 return
+            enemy_pool = [e for e in self.game.units + self.game.pawns + self.game.buildings
+                          if e.team != player_team]
             for u in self.game.units:
                 if u.entity_id in ids and u.team == player_team:
-                    u.set_attack_target(target)
+                    u.set_attack_target(target, enemy_pool)
 
         elif kind == "CMD_GATHER":
             ids = set(cmd.get("pawn_ids", []))
