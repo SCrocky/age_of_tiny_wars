@@ -1,6 +1,7 @@
 from __future__ import annotations
 import pygame
-from render_cache import get_scaled, get_scaled_rotated, get_font
+from pygame._sdl2.video import Renderer
+from texture_cache import get_texture, make_texture, get_font, get_circle_tex
 from entities.pawn import Task as PawnTask
 import assets
 
@@ -11,8 +12,6 @@ import assets
 
 _building_surfs: dict[str, pygame.Surface] = {}
 
-# Maps "building/{type}/{team}" → asset path.
-# House variants (house1/house2/house3) are handled by the loader below.
 _BUILDING_FILENAMES: dict[str, str] = {
     "archery":  "Archery.png",
     "barracks": "Barracks.png",
@@ -24,30 +23,32 @@ _BUILDING_FILENAMES: dict[str, str] = {
 
 
 def _load_building_surf(sprite_key: str) -> pygame.Surface:
-    """Load and cache a building surface from its sprite key."""
     surf = _building_surfs.get(sprite_key)
     if surf is None:
-        # sprite_key format: "building/{type}/{team}"
         _, btype, team = sprite_key.split("/")
         filename = _BUILDING_FILENAMES[btype]
         path = f"assets/Buildings/{team.capitalize()} Buildings/{filename}"
-        surf = assets.load_image(path).convert_alpha()
+        surf = assets.load_image(path)
         _building_surfs[sprite_key] = surf
     return surf
 
 
 # ---------------------------------------------------------------------------
-# Health bar
+# Shared drawing helpers
 # ---------------------------------------------------------------------------
+
+def draw_selection_circle(renderer: Renderer, cx: int, cy: int, r: int) -> None:
+    d = r * 2
+    get_circle_tex().draw(dstrect=(cx - r, cy - r, d, d))
+
 
 def draw_health_bar(
     entity,
-    surface: pygame.Surface,
+    renderer: Renderer,
     camera,
     width: int = 40,
     force: bool = False,
 ) -> None:
-    """Render a health bar above *entity*. Visible when selected, damaged, or forced."""
     if not force and not entity.selected and entity.hp == entity.max_hp:
         return
 
@@ -57,63 +58,73 @@ def draw_health_bar(
     bx = int(sx - bar_w / 2)
     by = int(sy - int(36 * camera.zoom))
 
-    pygame.draw.rect(surface, (80, 0, 0),   (bx, by, bar_w, bar_h))
+    renderer.draw_blend_mode = pygame.BLENDMODE_NONE
+    renderer.draw_color = (80, 0, 0, 255)
+    renderer.fill_rect(pygame.Rect(bx, by, bar_w, bar_h))
     fill = int(bar_w * entity.hp / entity.max_hp)
-    pygame.draw.rect(surface, (0, 200, 60), (bx, by, fill,  bar_h))
-    pygame.draw.rect(surface, (0, 0, 0),    (bx, by, bar_w, bar_h), 1)
+    if fill > 0:
+        renderer.draw_color = (0, 200, 60, 255)
+        renderer.fill_rect(pygame.Rect(bx, by, fill, bar_h))
+    renderer.draw_color = (0, 0, 0, 255)
+    renderer.draw_rect(pygame.Rect(bx, by, bar_w, bar_h))
 
 
 # ---------------------------------------------------------------------------
 # Building renderer
 # ---------------------------------------------------------------------------
 
-def render_building(building, surface: pygame.Surface, camera) -> None:
+def render_building(building, renderer: Renderer, camera) -> None:
     if not building.alive:
         return
     surf = _load_building_surf(building.sprite_key)
     w = max(1, int(building.DISPLAY_W * camera.zoom))
     h = max(1, int(building.DISPLAY_H * camera.zoom))
-    scaled = get_scaled(surf, w, h)
     sx, sy = camera.world_to_screen(building.x, building.y)
-    surface.blit(scaled, (int(sx - w / 2), int(sy - h / 2)))
+    get_texture(surf).draw(dstrect=(int(sx - w / 2), int(sy - h / 2), w, h))
     if building.selected:
-        pygame.draw.rect(surface, (255, 220, 0),
-                         (int(sx - w / 2), int(sy - h / 2), w, h), 2)
-    draw_health_bar(building, surface, camera, width=building.HEALTH_BAR_WIDTH)
+        renderer.draw_blend_mode = pygame.BLENDMODE_NONE
+        renderer.draw_color = (255, 220, 0, 255)
+        renderer.draw_rect(pygame.Rect(int(sx - w / 2), int(sy - h / 2), w, h))
+    draw_health_bar(building, renderer, camera, width=building.HEALTH_BAR_WIDTH)
 
 
 # ---------------------------------------------------------------------------
 # Blueprint renderer
 # ---------------------------------------------------------------------------
 
-def render_blueprint(blueprint, surface: pygame.Surface, camera) -> None:
+def render_blueprint(blueprint, renderer: Renderer, camera) -> None:
     b     = blueprint._building
     ratio = blueprint.progress / b.max_hp
 
-    surf   = _load_building_surf(b.sprite_key)
-    w      = max(1, int(b.DISPLAY_W * camera.zoom))
-    h      = max(1, int(b.DISPLAY_H * camera.zoom))
-    scaled = get_scaled(surf, w, h).copy()
-    scaled.set_alpha(int(60 + ratio * 180))
+    surf = _load_building_surf(b.sprite_key)
+    w    = max(1, int(b.DISPLAY_W * camera.zoom))
+    h    = max(1, int(b.DISPLAY_H * camera.zoom))
+    tex  = get_texture(surf)
+    tex.alpha = int(60 + ratio * 180)
     sx, sy = camera.world_to_screen(b.x, b.y)
-    surface.blit(scaled, (int(sx - w / 2), int(sy - h / 2)))
+    tex.draw(dstrect=(int(sx - w / 2), int(sy - h / 2), w, h))
+    tex.alpha = 255
 
     bar_w = max(20, int(w * 0.6))
     bar_h = max(4, int(6 * camera.zoom))
     bx    = int(sx - bar_w / 2)
     by    = int(sy - h / 2 - bar_h - 4)
-    pygame.draw.rect(surface, (40, 40, 40),    (bx, by, bar_w, bar_h))
-    fill  = int(bar_w * ratio)
+    renderer.draw_blend_mode = pygame.BLENDMODE_NONE
+    renderer.draw_color = (40, 40, 40, 255)
+    renderer.fill_rect(pygame.Rect(bx, by, bar_w, bar_h))
+    fill = int(bar_w * ratio)
     if fill > 0:
-        pygame.draw.rect(surface, (255, 200, 50), (bx, by, fill,  bar_h))
-    pygame.draw.rect(surface, (0, 0, 0),       (bx, by, bar_w, bar_h), 1)
+        renderer.draw_color = (255, 200, 50, 255)
+        renderer.fill_rect(pygame.Rect(bx, by, fill, bar_h))
+    renderer.draw_color = (0, 0, 0, 255)
+    renderer.draw_rect(pygame.Rect(bx, by, bar_w, bar_h))
 
 
 # ---------------------------------------------------------------------------
 # Arrow renderer
 # ---------------------------------------------------------------------------
 
-_ARROW_DISPLAY_SIZE = 32  # render size in world px
+_ARROW_DISPLAY_SIZE = 32
 
 _arrow_surfs: dict[str, pygame.Surface] = {}
 
@@ -122,34 +133,35 @@ def _load_arrow_surf(team: str) -> pygame.Surface:
     surf = _arrow_surfs.get(team)
     if surf is None:
         path = f"assets/Units/{team.capitalize()} Units/Archer/Arrow.png"
-        surf = assets.load_image(path).convert_alpha()
+        surf = assets.load_image(path)
         _arrow_surfs[team] = surf
     return surf
 
 
-def render_arrow(arrow, surface: pygame.Surface, camera) -> None:
+def render_arrow(arrow, renderer: Renderer, camera) -> None:
     if not arrow.alive:
         return
-    surf    = _load_arrow_surf(arrow.team)
-    size    = max(1, int(_ARROW_DISPLAY_SIZE * camera.zoom))
-    rotated = get_scaled_rotated(surf, size, arrow._angle)
-    sx, sy  = camera.world_to_screen(arrow.x, arrow.y)
-    rect    = rotated.get_rect(center=(int(sx), int(sy)))
-    surface.blit(rotated, rect)
+    size   = max(1, int(_ARROW_DISPLAY_SIZE * camera.zoom))
+    sx, sy = camera.world_to_screen(arrow.x, arrow.y)
+    # pygame.transform.rotate is CCW; SDL2 Texture.draw(angle) is CW — negate.
+    get_texture(_load_arrow_surf(arrow.team)).draw(
+        dstrect=(int(sx - size / 2), int(sy - size / 2), size, size),
+        angle=-arrow._angle,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Resource renderers
 # ---------------------------------------------------------------------------
 
-_gold_frames:  dict[str, list[pygame.Surface]] = {}   # sprite_key → frame list
+_gold_frames:  dict[str, list[pygame.Surface]] = {}
 _wood_frames:  dict[str, list[pygame.Surface]] = {}
 _wood_stumps:  dict[str, pygame.Surface]       = {}
-_sheep_frames: dict[str, list[pygame.Surface]] = {}   # anim name → frame list
+_sheep_frames: dict[str, list[pygame.Surface]] = {}
 
 
 def _load_sheet(path: str, frame_w: int) -> list[pygame.Surface]:
-    sheet   = assets.load_image(path).convert_alpha()
+    sheet   = assets.load_image(path)
     frame_h = sheet.get_height()
     count   = sheet.get_width() // frame_w
     return [
@@ -161,7 +173,6 @@ def _load_sheet(path: str, frame_w: int) -> list[pygame.Surface]:
 def _get_gold_frames(sprite_key: str) -> list[pygame.Surface]:
     frames = _gold_frames.get(sprite_key)
     if frames is None:
-        # sprite_key: "resource/gold/{n}"
         n      = sprite_key.split("/")[2]
         path   = f"assets/Terrain/Resources/Gold/Gold Stones/Gold Stone {n}_Highlight.png"
         frames = _load_sheet(path, 128)
@@ -184,7 +195,7 @@ def _get_wood_stump(sprite_key: str) -> pygame.Surface:
         n     = sprite_key.split("/")[2]
         stump = assets.load_image(
             f"assets/Terrain/Resources/Wood/Trees/Stump {n}.png"
-        ).convert_alpha()
+        )
         _wood_stumps[sprite_key] = stump
     return stump
 
@@ -206,8 +217,7 @@ def _get_sheep_frames(state: str) -> list[pygame.Surface]:
     return frames
 
 
-def render_resource(node, surface: pygame.Surface, camera) -> None:
-    # Support duck-typed proxies that expose a resource_type attribute
+def render_resource(node, renderer: Renderer, camera) -> None:
     res_type = getattr(node, "resource_type", None)
     if res_type is None:
         from entities.resource import GoldNode, WoodNode, MeatNode
@@ -215,46 +225,45 @@ def render_resource(node, surface: pygame.Surface, camera) -> None:
         elif isinstance(node, WoodNode): res_type = "wood"
         elif isinstance(node, MeatNode): res_type = "meat"
 
-    if res_type == "gold":   _render_gold(node, surface, camera)
-    elif res_type == "wood": _render_wood(node, surface, camera)
-    elif res_type == "meat": _render_meat(node, surface, camera)
+    if res_type == "gold":   _render_gold(node, renderer, camera)
+    elif res_type == "wood": _render_wood(node, renderer, camera)
+    elif res_type == "meat": _render_meat(node, renderer, camera)
 
 
-def _render_gold(node, surface: pygame.Surface, camera) -> None:
+def _render_gold(node, renderer: Renderer, camera) -> None:
     if node.depleted:
         return
     frames = _get_gold_frames(node.sprite_key)
     frame  = frames[node._frame_idx % len(frames)]
     size   = max(1, int(node.DISPLAY_SIZE * camera.zoom))
-    scaled = get_scaled(frame, size, size)
     sx, sy = camera.world_to_screen(node.x, node.y)
-    surface.blit(scaled, (int(sx - size / 2), int(sy - size / 2)))
+    get_texture(frame).draw(dstrect=(int(sx - size / 2), int(sy - size / 2), size, size))
 
 
-def _render_wood(node, surface: pygame.Surface, camera) -> None:
+def _render_wood(node, renderer: Renderer, camera) -> None:
     sx, sy = camera.world_to_screen(node.x, node.y)
     size   = max(1, int(node.DISPLAY_SIZE * camera.zoom))
     if node.depleted:
         stump = _get_wood_stump(node.sprite_key)
         sw    = max(1, int(size * 192 / 256))
-        scaled = get_scaled(stump, sw, size)
-        surface.blit(scaled, (int(sx - sw / 2), int(sy - size / 2)))
+        get_texture(stump).draw(dstrect=(int(sx - sw / 2), int(sy - size / 2), sw, size))
         return
     frames = _get_wood_frames(node.sprite_key)
     frame  = frames[node._frame_idx % len(frames)]
-    scaled = get_scaled(frame, size, size)
-    surface.blit(scaled, (int(sx - size / 2), int(sy - size / 2)))
+    get_texture(frame).draw(dstrect=(int(sx - size / 2), int(sy - size / 2), size, size))
 
 
-def _render_meat(node, surface: pygame.Surface, camera) -> None:
+def _render_meat(node, renderer: Renderer, camera) -> None:
     if node.depleted:
         return
     frames = _get_sheep_frames(node._sheep_state)
     frame  = frames[node._frame_idx % len(frames)]
     size   = max(1, int(node.DISPLAY_SIZE * camera.zoom))
-    scaled = get_scaled(frame, size, size, flip_x=not node._facing_right)
     sx, sy = camera.world_to_screen(node.x, node.y)
-    surface.blit(scaled, (int(sx - size / 2), int(sy - size / 2)))
+    get_texture(frame).draw(
+        dstrect=(int(sx - size / 2), int(sy - size / 2), size, size),
+        flip_x=not node._facing_right,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +286,6 @@ _PAWN_FILENAMES: dict[str, str] = {
     "interact_hammer":  "Pawn_Interact Hammer.png",
 }
 
-# (team, anim_key) → frame list
 _pawn_frames: dict[tuple[str, str], list[pygame.Surface]] = {}
 
 
@@ -292,23 +300,26 @@ def _get_pawn_frames(team: str, anim_key: str) -> list[pygame.Surface]:
     return frames
 
 
-def render_pawn(pawn, surface: pygame.Surface, camera) -> None:
-    frames  = _get_pawn_frames(pawn.team, pawn._anim_key)
-    frame   = frames[pawn._frame_idx % len(frames)]
-    size    = max(1, int(pawn.DISPLAY_SIZE * camera.zoom))
-    flip_x  = not pawn._facing_right
-    scaled  = get_scaled(frame, size, size, flip_x=flip_x)
-    sx, sy  = camera.world_to_screen(pawn.x, pawn.y)
-    surface.blit(scaled, (int(sx - size / 2), int(sy - size / 2)))
+def render_pawn(pawn, renderer: Renderer, camera) -> None:
+    frames = _get_pawn_frames(pawn.team, pawn._anim_key)
+    frame  = frames[pawn._frame_idx % len(frames)]
+    size   = max(1, int(pawn.DISPLAY_SIZE * camera.zoom))
+    sx, sy = camera.world_to_screen(pawn.x, pawn.y)
+    get_texture(frame).draw(
+        dstrect=(int(sx - size / 2), int(sy - size / 2), size, size),
+        flip_x=not pawn._facing_right,
+    )
     if pawn.selected:
         r = max(2, int(pawn.SELECT_RADIUS * camera.zoom))
-        pygame.draw.circle(surface, (255, 220, 0), (int(sx), int(sy)), r, 2)
-    draw_health_bar(pawn, surface, camera)
+        draw_selection_circle(renderer, int(sx), int(sy), r)
+    draw_health_bar(pawn, renderer, camera)
     task_val = pawn._task.value if isinstance(pawn._task, PawnTask) else pawn._task
     if task_val == "to_depot" and pawn._carried > 0:
-        font  = get_font(max(12, int(16 * camera.zoom)))
-        label = font.render(str(int(pawn._carried)), True, (255, 255, 180))
-        surface.blit(label, (int(sx), int(sy - size / 2 - 14 * camera.zoom)))
+        font     = get_font(max(12, int(16 * camera.zoom)))
+        lbl_surf = font.render(str(int(pawn._carried)), True, (255, 255, 180))
+        lbl_tex  = make_texture(lbl_surf)
+        lw, lh   = lbl_surf.get_size()
+        lbl_tex.draw(dstrect=(int(sx), int(sy - size / 2 - 14 * camera.zoom), lw, lh))
 
 
 # ---------------------------------------------------------------------------
@@ -334,17 +345,19 @@ def _get_archer_frames(team: str, anim_key: str) -> list[pygame.Surface]:
     return frames
 
 
-def render_archer(archer, surface: pygame.Surface, camera) -> None:
+def render_archer(archer, renderer: Renderer, camera) -> None:
     frames = _get_archer_frames(archer.team, archer._anim_key)
     frame  = frames[archer._frame_idx % len(frames)]
     size   = max(1, int(archer.DISPLAY_SIZE * camera.zoom))
-    scaled = get_scaled(frame, size, size, flip_x=not archer._facing_right)
     sx, sy = camera.world_to_screen(archer.x, archer.y)
-    surface.blit(scaled, (int(sx - size / 2), int(sy - size / 2)))
+    get_texture(frame).draw(
+        dstrect=(int(sx - size / 2), int(sy - size / 2), size, size),
+        flip_x=not archer._facing_right,
+    )
     if archer.selected:
         r = max(2, int(archer.SELECT_RADIUS * camera.zoom))
-        pygame.draw.circle(surface, (255, 220, 0), (int(sx), int(sy)), r, 2)
-    draw_health_bar(archer, surface, camera)
+        draw_selection_circle(renderer, int(sx), int(sy), r)
+    draw_health_bar(archer, renderer, camera)
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +366,6 @@ def render_archer(archer, surface: pygame.Surface, camera) -> None:
 
 _LANCER_DIRS = ("Right", "UpRight", "Up", "Down", "DownRight")
 
-# (team, anim, dir_key) → frame list  (dir_key="" for idle/run)
 _lancer_frames: dict[tuple, list[pygame.Surface]] = {}
 
 
@@ -375,7 +387,7 @@ def _get_lancer_frames(team: str, anim: str, dir_key: str = "") -> list[pygame.S
     return frames
 
 
-def render_lancer(lancer, surface: pygame.Surface, camera) -> None:
+def render_lancer(lancer, renderer: Renderer, camera) -> None:
     state = lancer._state
     idx   = lancer._frame_idx
 
@@ -394,13 +406,15 @@ def render_lancer(lancer, surface: pygame.Surface, camera) -> None:
 
     frame  = frames[idx % len(frames)]
     size   = max(1, int(lancer.DISPLAY_SIZE * camera.zoom))
-    scaled = get_scaled(frame, size, size, flip_x=flip_x)
     sx, sy = camera.world_to_screen(lancer.x, lancer.y)
-    surface.blit(scaled, (int(sx - size / 2), int(sy - size / 2)))
+    get_texture(frame).draw(
+        dstrect=(int(sx - size / 2), int(sy - size / 2), size, size),
+        flip_x=flip_x,
+    )
     if lancer.selected:
         r = max(2, int(lancer.SELECT_RADIUS * camera.zoom))
-        pygame.draw.circle(surface, (255, 220, 0), (int(sx), int(sy)), r, 2)
-    draw_health_bar(lancer, surface, camera)
+        draw_selection_circle(renderer, int(sx), int(sy), r)
+    draw_health_bar(lancer, renderer, camera)
 
 
 # ---------------------------------------------------------------------------
@@ -428,14 +442,16 @@ def _get_warrior_frames(team: str, anim_key: str) -> list[pygame.Surface]:
     return frames
 
 
-def render_warrior(warrior, surface: pygame.Surface, camera) -> None:
+def render_warrior(warrior, renderer: Renderer, camera) -> None:
     frames = _get_warrior_frames(warrior.team, warrior._anim_key)
     frame  = frames[warrior._frame_idx % len(frames)]
     size   = max(1, int(warrior.DISPLAY_SIZE * camera.zoom))
-    scaled = get_scaled(frame, size, size, flip_x=not warrior._facing_right)
     sx, sy = camera.world_to_screen(warrior.x, warrior.y)
-    surface.blit(scaled, (int(sx - size / 2), int(sy - size / 2)))
+    get_texture(frame).draw(
+        dstrect=(int(sx - size / 2), int(sy - size / 2), size, size),
+        flip_x=not warrior._facing_right,
+    )
     if warrior.selected:
         r = max(2, int(warrior.SELECT_RADIUS * camera.zoom))
-        pygame.draw.circle(surface, (255, 220, 0), (int(sx), int(sy)), r, 2)
-    draw_health_bar(warrior, surface, camera)
+        draw_selection_circle(renderer, int(sx), int(sy), r)
+    draw_health_bar(warrior, renderer, camera)

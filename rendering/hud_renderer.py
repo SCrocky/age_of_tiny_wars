@@ -5,6 +5,347 @@ hud.py is a self-contained renderer module — all surface loading, drawing,
 and click-hit-testing lives there with no game-logic dependencies.
 This module re-exports HUD so callers can import from the rendering package.
 """
-from hud import HUD
 
 __all__ = ["HUD"]
+
+import pygame
+from pygame._sdl2.video import Renderer
+import assets
+import texture_cache
+
+_UI = "assets/UI Elements/UI Elements"
+
+_AVATAR_IDX: dict[tuple[str, str], int] = {
+    ("Warrior",  "blue"):  1,
+    ("Lancer",   "blue"):  2,
+    ("Archer",   "blue"):  3,
+    ("Pawn",     "blue"):  5,
+    ("Castle",   "blue"):  5,
+    ("Archery",  "blue"):  3,
+    ("Barracks", "blue"):  1,
+    ("Warrior",  "black"): 21,
+    ("Lancer",   "black"): 22,
+    ("Archer",   "black"): 23,
+    ("Pawn",     "black"): 25,
+    ("Castle",   "black"): 25,
+    ("Archery",  "black"): 23,
+    ("Barracks", "black"): 21,
+}
+
+PAWN_COST    = {"meat": 20}
+ARCHER_COST  = {"wood": 15, "meat": 30}
+LANCER_COST  = {"wood": 45, "meat": 10}
+WARRIOR_COST = {"gold": 35, "meat": 40}
+
+BUTTON_SIZE = 72
+
+_PRODUCTION: dict[str, list[tuple[str, dict, str]]] = {
+    "Castle":   [("Pawn",    PAWN_COST,    "spawn_pawn")],
+    "Archery":  [("Archer",  ARCHER_COST,  "spawn_archer")],
+    "Barracks": [("Lancer",  LANCER_COST,  "spawn_lancer"),
+                 ("Warrior", WARRIOR_COST, "spawn_warrior")],
+}
+
+
+class HUD:
+    CORNER  = 16
+    PAD     = 8
+    ICON_SZ = 28
+
+    def __init__(self, sw: int, sh: int):
+        self.sw = sw
+        self.sh = sh
+        self._font    = pygame.font.SysFont(None, 22)
+        self._font_md = pygame.font.SysFont(None, 26)
+        self._avatars: dict[int, pygame.Surface] = {}
+        self._btn_avatars: dict[int, pygame.Surface] = {}
+        self._buttons: list[tuple[pygame.Rect, str]] = []
+        self._load()
+
+    # ------------------------------------------------------------------
+    # Asset loading
+    # ------------------------------------------------------------------
+
+    def _load(self):
+        raw_icons = {
+            "gold": assets.load_image(f"{_UI}/Icons/Icon_03.png"),
+            "wood": assets.load_image(f"{_UI}/Icons/Icon_02.png"),
+            "meat": assets.load_image(f"{_UI}/Icons/Icon_04.png"),
+            "pop":  assets.load_image(f"{_UI}/Icons/Icon_05.png"),
+        }
+        s = self.ICON_SZ
+        self._icons    = {k: pygame.transform.scale(v, (s, s))   for k, v in raw_icons.items()}
+        self._icons_sm = {k: pygame.transform.scale(v, (14, 14)) for k, v in raw_icons.items()}
+
+        self._panel_bg = assets.load_image(
+            f"{_UI}/Wood Table/WoodTable_Slots.png"
+        )
+
+        base   = assets.load_image(f"{_UI}/Bars/BigBar_Base.png")
+        bw, bh = base.get_size()
+        cap    = bw // 5
+        self._bar_h     = bh
+        self._bar_cap   = cap
+        self._bar_left  = base.subsurface(pygame.Rect(0,       0, cap, bh)).copy()
+        self._bar_mid   = base.subsurface(pygame.Rect(cap*2,   0, cap, bh)).copy()
+        self._bar_right = base.subsurface(pygame.Rect(cap * 4, 0, cap, bh)).copy()
+        self._bar_fill  = assets.load_image(f"{_UI}/Bars/BigBar_Fill.png")
+        self._fill_h    = self._bar_fill.get_height()
+
+        btn_reg_raw = assets.load_image(
+            f"{_UI}/Buttons/SmallBlueSquareButton_Regular.png"
+        )
+        btn_prs_raw = assets.load_image(
+            f"{_UI}/Buttons/SmallBlueSquareButton_Pressed.png"
+        )
+        self._btn_regular = pygame.transform.scale(btn_reg_raw, (BUTTON_SIZE, BUTTON_SIZE))
+        self._btn_pressed = pygame.transform.scale(btn_prs_raw, (BUTTON_SIZE, BUTTON_SIZE))
+
+        icon_size = int(BUTTON_SIZE * 0.55)
+        raw_build = {
+            "Archery":  assets.load_image("assets/Buildings/Blue Buildings/Archery.png"),
+            "Barracks": assets.load_image("assets/Buildings/Blue Buildings/Barracks.png"),
+            "House":    assets.load_image("assets/Buildings/Blue Buildings/House1.png"),
+        }
+        self._build_icons: dict[str, pygame.Surface] = {
+            k: pygame.transform.scale(v, (icon_size // 2, icon_size // 2))
+            for k, v in raw_build.items()
+        }
+
+    def _get_avatar(self, n: int) -> pygame.Surface:
+        if n not in self._avatars:
+            self._avatars[n] = assets.load_image(
+                f"{_UI}/Human Avatars/Avatars_{n:02d}.png"
+            )
+        return self._avatars[n]
+
+    def _get_btn_avatar(self, n: int) -> pygame.Surface:
+        if n not in self._btn_avatars:
+            size = BUTTON_SIZE - 20
+            self._btn_avatars[n] = pygame.transform.scale(self._get_avatar(n), (size, size))
+        return self._btn_avatars[n]
+
+    def on_zoom_changed(self) -> None:
+        self._btn_avatars.clear()
+
+    # ------------------------------------------------------------------
+    # Drawing helpers
+    # ------------------------------------------------------------------
+
+    def _draw_panel(self, renderer: Renderer, x: int, y: int, w: int, h: int):
+        texture_cache.get_texture(self._panel_bg).draw(dstrect=(int(x), int(y), max(1, w), max(1, h)))
+
+    def _draw_hp_bar(self, renderer: Renderer, x: int, y: int, w: int,
+                     hp: int, max_hp: int):
+        bh  = self._bar_h
+        cap = self._bar_cap
+        texture_cache.get_texture(self._bar_left).draw(dstrect=(x, y, cap, bh))
+        texture_cache.get_texture(self._bar_right).draw(dstrect=(x + w - cap, y, cap, bh))
+        mid_w = max(1, w - cap * 2)
+        texture_cache.get_texture(self._bar_mid).draw(dstrect=(x + cap, y, mid_w, bh))
+        ratio  = max(0.0, min(1.0, hp / max(1, max_hp)))
+        inner  = max(1, w - cap * 2)
+        fill_w = int(inner * ratio)
+        fh     = self._fill_h
+        fy     = y + (bh - fh) // 2
+        if fill_w > 0:
+            texture_cache.get_texture(self._bar_fill).draw(dstrect=(x + cap, fy, fill_w, fh))
+
+    def _can_afford(self, eco: dict, costs: dict) -> bool:
+        return all(eco.get(k, 0) >= v for k, v in costs.items())
+
+    def _draw_button(self, renderer: Renderer, rect: pygame.Rect,
+                     icon: pygame.Surface, costs: dict[str, int],
+                     affordable: bool, action: str):
+        btn_surf = self._btn_regular if affordable else self._btn_pressed
+        btn_tex  = texture_cache.get_texture(btn_surf)
+        if not affordable:
+            btn_tex.alpha = 160
+        btn_tex.draw(dstrect=(*rect.topleft, BUTTON_SIZE, BUTTON_SIZE))
+        if not affordable:
+            btn_tex.alpha = 255
+
+        icon_w = icon.get_width()
+        icon_h = icon.get_height()
+        texture_cache.get_texture(icon).draw(dstrect=(
+            rect.x + (rect.w - icon_w) // 2,
+            rect.y + 4,
+            icon_w, icon_h,
+        ))
+
+        col   = (255, 235, 180) if affordable else (160, 120, 100)
+        items = list(costs.items())
+        item_w = 14 + 2 + self._font.size("99")[0] + 4
+        row_w  = len(items) * item_w - 4
+        cx     = rect.x + (rect.w - row_w) // 2
+        cy     = rect.bottom - 16
+        for res, amount in items:
+            texture_cache.get_texture(self._icons_sm[res]).draw(
+                dstrect=(cx, cy, 14, 14)
+            )
+            num_surf = self._font.render(str(amount), True, col)
+            num_tex  = texture_cache.make_texture(num_surf)
+            nw, nh   = num_surf.get_size()
+            num_tex.draw(dstrect=(cx + 16, cy + 1, nw, nh))
+            cx += item_w
+
+        self._buttons.append((rect, action))
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
+    def draw(self, renderer: Renderer, economy: dict, all_entities: list,
+             player_team: str = "blue"):
+        self._buttons = []
+        self._draw_resources(renderer, economy[player_team])
+        selected = [e for e in all_entities
+                    if e.selected and getattr(e, "team", None) == player_team]
+        if selected:
+            self._draw_selection(renderer, selected, economy[player_team])
+
+    def handle_click(self, mx: int, my: int) -> str | None:
+        for rect, action in self._buttons:
+            if rect.collidepoint(mx, my):
+                return action
+        return None
+
+    # ------------------------------------------------------------------
+    # Resource panel (top-left)
+    # ------------------------------------------------------------------
+
+    def _draw_resources(self, renderer: Renderer, eco: dict):
+        s     = self.ICON_SZ
+        pad   = self.PAD
+        c     = self.CORNER
+        row_h = s + pad
+        pw    = 160
+        ph    = row_h * 4 + c + pad
+        self._draw_panel(renderer, pad, pad, pw, ph)
+        for i, key in enumerate(("gold", "wood", "meat")):
+            rx  = pad + c
+            ry  = pad + c + i * row_h
+            texture_cache.get_texture(self._icons[key]).draw(dstrect=(rx, ry, s, s))
+            txt_surf = self._font.render(str(eco[key]), True, (255, 235, 180))
+            txt_tex  = texture_cache.make_texture(txt_surf)
+            tw, th   = txt_surf.get_size()
+            txt_tex.draw(dstrect=(rx + s + 6, ry + (s - th) // 2, tw, th))
+        rx  = pad + c
+        ry  = pad + c + 3 * row_h
+        texture_cache.get_texture(self._icons["pop"]).draw(dstrect=(rx, ry, s, s))
+        pop_txt = f"{eco.get('pop', 0)}/{eco.get('pop_cap', 0)}"
+        col  = (200, 80, 80) if eco.get('pop', 0) >= eco.get('pop_cap', 1) else (255, 235, 180)
+        txt_surf = self._font.render(pop_txt, True, col)
+        txt_tex  = texture_cache.make_texture(txt_surf)
+        tw, th   = txt_surf.get_size()
+        txt_tex.draw(dstrect=(rx + s + 6, ry + (s - th) // 2, tw, th))
+
+    # ------------------------------------------------------------------
+    # Selection panel (bottom-centre)
+    # ------------------------------------------------------------------
+
+    def _draw_selection(self, renderer: Renderer, selected: list, eco: dict):
+        from entities.blueprint import BUILDABLE
+        pad      = self.PAD
+        ph_info  = 116
+        has_pawn = any(type(e).__name__ == "Pawn" for e in selected)
+        ph_build = BUTTON_SIZE + pad * 2 if has_pawn else 0
+        ph       = ph_info + ph_build
+        pw       = min(self.sw - 40, 640)
+        px       = (self.sw - pw) // 2
+        py       = self.sh - ph - pad
+        self._draw_panel(renderer, px, py, pw, ph)
+        if len(selected) == 1:
+            self._draw_single(renderer, selected[0], px, py, pw, ph_info, eco)
+        else:
+            self._draw_multi(renderer, selected, px, py, pw, ph_info)
+        if has_pawn:
+            self._draw_build_row(renderer, px, py + ph_info, pw, eco, BUILDABLE)
+
+    def _draw_build_row(self, renderer: Renderer, px: int, py: int, pw: int,
+                        eco: dict, buildable: dict):
+        pad     = self.PAD
+        names   = list(buildable.keys())
+        total_w = len(names) * BUTTON_SIZE + (len(names) - 1) * pad
+        start_x = px + (pw - total_w) // 2
+        by      = py + pad
+        for i, name in enumerate(names):
+            _, costs = buildable[name]
+            bx   = start_x + i * (BUTTON_SIZE + pad)
+            rect = pygame.Rect(bx, by, BUTTON_SIZE, BUTTON_SIZE)
+            self._draw_button(
+                renderer, rect,
+                icon       = self._build_icons[name],
+                costs      = costs,
+                affordable = self._can_afford(eco, costs),
+                action     = f"build_{name.lower()}",
+            )
+
+    def _draw_single(self, renderer: Renderer, ent, px, py, pw, ph, eco: dict):
+        pad = self.PAD
+        c   = self.CORNER
+        cls_name = type(ent).__name__
+        prod     = _PRODUCTION.get(cls_name, [])
+        n_btns   = len(prod)
+        btn_col_w = (n_btns * BUTTON_SIZE + (n_btns - 1) * pad + pad * 2) if n_btns else 0
+
+        av_size = ph - c - pad * 3
+        av_idx  = _AVATAR_IDX.get((type(ent).__name__, ent.team), 4)
+        ax, ay  = px + c + pad, py + c
+        texture_cache.get_texture(self._get_avatar(av_idx)).draw(
+            dstrect=(ax, ay, av_size, av_size)
+        )
+
+        tx = ax + av_size + pad * 2
+        ty = ay
+        name_surf = self._font_md.render(type(ent).__name__, True, (255, 235, 180))
+        name_tex  = texture_cache.make_texture(name_surf)
+        nw, nh    = name_surf.get_size()
+        name_tex.draw(dstrect=(tx, ty, nw, nh))
+
+        bar_w = pw - (tx - px) - c - pad * 2 - btn_col_w
+        bar_y = ty + nh + 4
+        self._draw_hp_bar(renderer, tx, bar_y, bar_w, ent.hp, ent.max_hp)
+        hp_surf = self._font.render(f"{ent.hp} / {ent.max_hp}", True, (200, 200, 200))
+        hp_tex  = texture_cache.make_texture(hp_surf)
+        hw, hh  = hp_surf.get_size()
+        hp_tex.draw(dstrect=(tx, bar_y + self._bar_h + 4, hw, hh))
+
+        if prod:
+            total_w = n_btns * BUTTON_SIZE + (n_btns - 1) * pad
+            start_x = px + pw - c - pad - total_w
+            by      = py + (ph - BUTTON_SIZE) // 2
+            for i, (unit_key, costs, action) in enumerate(prod):
+                av_idx2 = _AVATAR_IDX.get((unit_key, ent.team), 4)
+                bx      = start_x + i * (BUTTON_SIZE + pad)
+                rect    = pygame.Rect(bx, by, BUTTON_SIZE, BUTTON_SIZE)
+                self._draw_button(
+                    renderer, rect,
+                    icon       = self._get_btn_avatar(av_idx2),
+                    costs      = costs,
+                    affordable = self._can_afford(eco, costs),
+                    action     = action,
+                )
+
+    def _draw_multi(self, renderer: Renderer, selected: list, px, py, pw, ph):
+        pad      = self.PAD
+        c        = self.CORNER
+        av_size  = ph - c - pad * 3
+        max_show = max(1, (pw - c * 2 - pad) // (av_size + pad))
+        for i, ent in enumerate(selected[:max_show]):
+            av_idx = _AVATAR_IDX.get((type(ent).__name__, ent.team), 4)
+            ax     = px + c + pad + i * (av_size + pad)
+            ay     = py + c
+            texture_cache.get_texture(self._get_avatar(av_idx)).draw(
+                dstrect=(ax, ay, av_size, av_size)
+            )
+            ratio = max(0, ent.hp) / max(1, ent.max_hp)
+            col   = (50, 200, 80) if ratio > 0.5 else (220, 180, 0) if ratio > 0.25 else (200, 50, 50)
+            renderer.draw_blend_mode = pygame.BLENDMODE_NONE
+            renderer.draw_color = (*col, 255)
+            renderer.fill_rect(pygame.Rect(ax, ay + av_size + 2, av_size, 4))
+        if len(selected) > max_show:
+            more_surf = self._font.render(f"+{len(selected) - max_show}", True, (200, 200, 200))
+            more_tex  = texture_cache.make_texture(more_surf)
+            mw, mh    = more_surf.get_size()
+            more_tex.draw(dstrect=(px + pw - c - mw - pad, py + (ph - mh) // 2, mw, mh))

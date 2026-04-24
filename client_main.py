@@ -17,6 +17,7 @@ import threading
 import time
 
 import pygame
+from pygame._sdl2.video import Window, Renderer
 
 SCREEN_WIDTH  = 1600
 SCREEN_HEIGHT = 900
@@ -81,6 +82,15 @@ def _network_thread(host: str, port: int, inbox: queue.Queue, outbox: queue.Queu
     asyncio.run(run())
 
 
+def _blit_text(renderer: Renderer, font: pygame.font.Font, text: str,
+               color: tuple, cx: int, cy: int) -> None:
+    import texture_cache
+    surf = font.render(text, True, color)
+    tex  = texture_cache.make_texture(surf)
+    w, h = surf.get_size()
+    tex.draw(dstrect=(cx - w // 2, cy - h // 2, w, h))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Age of Wars client")
     parser.add_argument("--host", default="localhost")
@@ -88,17 +98,22 @@ def main():
     args = parser.parse_args()
 
     pygame.init()
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN)
-    pygame.display.set_caption("Age of Wars — Multiplayer")
-    clock = pygame.time.Clock()
-    font  = pygame.font.SysFont(None, 36)
+    window   = Window("Age of Wars — Multiplayer", size=(SCREEN_WIDTH, SCREEN_HEIGHT),
+                      fullscreen=True)
+    renderer = Renderer(window, accelerated=1, vsync=True)
+    renderer.logical_size = (SCREEN_WIDTH, SCREEN_HEIGHT)
+    clock    = pygame.time.Clock()
+    font     = pygame.font.SysFont(None, 36)
+
+    import texture_cache
+    texture_cache.init(renderer)
 
     # Show connecting screen
-    screen.fill((10, 20, 40))
-    msg = font.render(f"Connecting to {args.host}:{args.port}…", True, (200, 200, 200))
-    screen.blit(msg, (SCREEN_WIDTH // 2 - msg.get_width() // 2,
-                      SCREEN_HEIGHT // 2 - msg.get_height() // 2))
-    pygame.display.flip()
+    renderer.draw_color = (10, 20, 40, 255)
+    renderer.clear()
+    _blit_text(renderer, font, f"Connecting to {args.host}:{args.port}…",
+               (200, 200, 200), SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+    renderer.present()
 
     # Start network thread
     inbox:        queue.Queue = queue.Queue()
@@ -126,11 +141,11 @@ def main():
 
     result = start_result[0]
     if isinstance(result, Exception):
-        screen.fill((10, 20, 40))
-        err = font.render(f"Connection failed: {result}", True, (200, 80, 80))
-        screen.blit(err, (SCREEN_WIDTH // 2 - err.get_width() // 2,
-                          SCREEN_HEIGHT // 2 - err.get_height() // 2))
-        pygame.display.flip()
+        renderer.draw_color = (10, 20, 40, 255)
+        renderer.clear()
+        _blit_text(renderer, font, f"Connection failed: {result}",
+                   (200, 80, 80), SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+        renderer.present()
         time.sleep(3)
         pygame.quit()
         sys.exit(1)
@@ -138,15 +153,15 @@ def main():
     player_team, scene = result
 
     # Show waiting screen until first snapshot arrives
-    screen.fill((10, 20, 40))
-    wait_msg = font.render("Waiting for game to start…", True, (200, 200, 200))
-    screen.blit(wait_msg, (SCREEN_WIDTH // 2 - wait_msg.get_width() // 2,
-                            SCREEN_HEIGHT // 2 - wait_msg.get_height() // 2))
-    pygame.display.flip()
+    renderer.draw_color = (10, 20, 40, 255)
+    renderer.clear()
+    _blit_text(renderer, font, "Waiting for game to start…",
+               (200, 200, 200), SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+    renderer.present()
 
     # Create client game
     from client_game import ClientGame
-    game = ClientGame(screen, scene, player_team)
+    game = ClientGame(renderer, window, scene, player_team)
 
     # Main loop
     running = True
@@ -178,7 +193,7 @@ def main():
             except queue.Empty:
                 break
 
-        pygame.display.flip()
+        renderer.present()
 
     pygame.quit()
 
