@@ -217,6 +217,15 @@ class ClientGame:
                 self.debug = not self.debug
             elif event.key == pygame.K_F3:
                 self._show_debug = not self._show_debug
+            elif event.key == pygame.K_h:
+                castle = next(
+                    (b for b in self._buildings
+                     if type(b).__name__ == "Castle" and b.team == self.player_team),
+                    None,
+                )
+                if castle is not None:
+                    self.camera.x = castle.x - self.w / 2 / self.camera.zoom
+                    self.camera.y = castle.y - self.h / 2 / self.camera.zoom
 
         elif event.type == pygame.MOUSEWHEEL:
             mx, my = self._current_mouse_pos
