@@ -50,6 +50,7 @@ class GameServer:
         self._writers: dict[str, asyncio.StreamWriter] = {}
         self._disconnected: set[str] = set()
         self._paused: bool = False
+        self._pending_garrisons: dict[int, object] = {}  # archer entity_id → Tower
 
     async def run(self, players: list):
         """
@@ -93,6 +94,7 @@ class GameServer:
                 self._apply_command(cmd, player_team)
 
             self.game.update(dt)
+            self._resolve_pending_garrisons()
             self._tick += 1
 
             if self._tick % _TICKS_PER_SNAP == 0:
@@ -163,6 +165,25 @@ class GameServer:
         await self._broadcast({"type": "GAME_OVER", "winner": other})
 
     # ------------------------------------------------------------------
+    # Pending garrison resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_pending_garrisons(self):
+        done = []
+        for archer_id, tower in self._pending_garrisons.items():
+            archer = next((u for u in self.game.units if u.entity_id == archer_id), None)
+            if archer is None or not archer.alive or not tower.alive:
+                done.append(archer_id)
+                continue
+            tx, ty = tower.closest_point(archer.x, archer.y)
+            if math.hypot(tx - archer.x, ty - archer.y) <= TILE_SIZE:
+                if tower.garrison(archer):
+                    self.game.units.remove(archer)
+                done.append(archer_id)
+        for archer_id in done:
+            del self._pending_garrisons[archer_id]
+
+    # ------------------------------------------------------------------
     # Command dispatch
     # ------------------------------------------------------------------
 
@@ -181,6 +202,7 @@ class GameServer:
                 start = (int(unit.x // TILE_SIZE), int(unit.y // TILE_SIZE))
                 path = astar(self.game.map, start, dest)
                 unit.set_path(path)
+                self._pending_garrisons.pop(unit.entity_id, None)
 
         elif kind == "CMD_ATTACK":
             ids = set(cmd.get("unit_ids", []))
@@ -193,6 +215,7 @@ class GameServer:
             for u in self.game.units:
                 if u.entity_id in ids and u.team == player_team:
                     u.set_attack_target(target, enemy_pool)
+                    self._pending_garrisons.pop(u.entity_id, None)
 
         elif kind == "CMD_GATHER":
             ids = set(cmd.get("pawn_ids", []))
@@ -232,8 +255,18 @@ class GameServer:
                 return
             for u in list(self.game.units):
                 if u.entity_id in archer_ids and u.team == player_team and isinstance(u, Archer):
-                    if tower.garrison(u):
-                        self.game.units.remove(u)
+                    tx, ty = tower.closest_point(u.x, u.y)
+                    if math.hypot(tx - u.x, ty - u.y) <= TILE_SIZE:
+                        if tower.garrison(u):
+                            self.game.units.remove(u)
+                            self._pending_garrisons.pop(u.entity_id, None)
+                    else:
+                        dest = self.game.map.nearest_walkable(
+                            int(tower.x // TILE_SIZE), int(tower.y // TILE_SIZE)
+                        )
+                        start = (int(u.x // TILE_SIZE), int(u.y // TILE_SIZE))
+                        u.set_path(astar(self.game.map, start, dest))
+                        self._pending_garrisons[u.entity_id] = tower
                     break  # one archer per tower
 
         elif kind == "CMD_RELEASE":
