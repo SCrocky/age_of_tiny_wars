@@ -88,8 +88,12 @@ class EntityProxy:
         self._resource_type: str | None = None
 
         # Resource
-        self.amount:       int   = 0
-        self._sheep_state: str   = "idle"
+        self.amount:        int   = 0
+        self._sheep_state:  str   = "idle"
+        self._anim_timer:   float = 0.0
+        self._target_x:     float = 0.0
+        self._target_y:     float = 0.0
+        self._speed:        float = 0.0
 
         # Blueprint
         self.progress:     float = 0.0
@@ -113,6 +117,28 @@ class EntityProxy:
         if self._building is not None:
             return self._building.y
         return self.y
+
+    def tick_sheep(self, dt: float):
+        import math
+        from entities.resource import ANIM_FPS, _SHEEP_FRAMES
+        # Advance position locally
+        if self._speed > 0 and self._sheep_state in ("move", "flee"):
+            dx   = self._target_x - self.x
+            dy   = self._target_y - self.y
+            dist = math.hypot(dx, dy)
+            step = self._speed * dt
+            if dist <= step:
+                self.x, self.y = self._target_x, self._target_y
+                self._speed = 0.0
+            else:
+                self.x += dx / dist * step
+                self.y += dy / dist * step
+        # Advance animation
+        self._anim_timer += dt
+        if self._anim_timer >= 1.0 / ANIM_FPS:
+            self._anim_timer -= 1.0 / ANIM_FPS
+            frame_count       = _SHEEP_FRAMES.get(self._sheep_state, 1)
+            self._frame_idx   = (self._frame_idx + 1) % frame_count
 
     def hit_test(self, sx: float, sy: float, camera) -> bool:
         wx, wy = camera.world_to_screen(self.x, self.y)
@@ -148,8 +174,16 @@ class EntityProxy:
         self._resource_type = data.get("resource_type")
 
         # Resource
-        self.amount       = data.get("amount", 0)
-        self._sheep_state = data.get("sheep_state", "idle")
+        self.amount = data.get("amount", 0)
+        new_sheep_state = data.get("sheep_state", self._sheep_state)
+        if new_sheep_state != self._sheep_state:
+            self._sheep_state = new_sheep_state
+            self._frame_idx   = 0
+            self._anim_timer  = 0.0
+        if "target_x" in data:
+            self._target_x = data["target_x"]
+            self._target_y = data["target_y"]
+            self._speed    = data["speed"]
 
         # Blueprint sub-proxy
         if data.get("type") == "Blueprint":

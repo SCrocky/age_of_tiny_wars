@@ -1,7 +1,7 @@
 import math
 import random
 
-ANIM_FPS   = 6
+ANIM_FPS   = 4
 HIT_RADIUS = 48.0   # world px for click detection
 
 # Frame counts per animation strip (sourced from sprite sheet dimensions).

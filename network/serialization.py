@@ -110,15 +110,19 @@ def _serialize_entity(entity) -> dict:
         return base
 
     if isinstance(entity, ResourceNode):
-        base["hp"]          = entity.amount
-        base["max_hp"]      = entity.max_amount
-        base["amount"]      = entity.amount
-        base["frame_idx"]   = entity._frame_idx
+        base["hp"]     = entity.amount
+        base["max_hp"] = entity.max_amount
+        base["amount"] = entity.amount
+        if not hasattr(entity, "_sheep_state"):
+            base["frame_idx"] = entity._frame_idx
         if hasattr(entity, "sprite_key"):
             base["sprite_key"] = entity.sprite_key
         if hasattr(entity, "_sheep_state"):
-            base["sheep_state"]   = entity._sheep_state
-            base["facing_right"]  = entity._facing_right
+            base["sheep_state"]  = entity._sheep_state
+            base["facing_right"] = entity._facing_right
+            base["target_x"]     = entity._target_x
+            base["target_y"]     = entity._target_y
+            base["speed"]        = entity._speed
         return base
 
     # Units and Pawns (Entity subclasses with animation state)

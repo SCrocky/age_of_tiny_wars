@@ -284,6 +284,10 @@ class ClientGame:
         )
         self.camera.update(dt, self.map.pixel_width, self.map.pixel_height, inp)
 
+        for sheep in self._resources:
+            if type(sheep).__name__ == "MeatNode":
+                sheep.tick_sheep(dt)
+
         friendly = [e for e in self._units + self._pawns + self._buildings
                     if e.team == self.player_team]
         self.fog.update(friendly, TILE_SIZE)
