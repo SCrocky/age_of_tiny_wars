@@ -104,7 +104,7 @@ class HUD:
         self._btn_regular = pygame.transform.scale(btn_reg_raw, (BUTTON_SIZE, BUTTON_SIZE))
         self._btn_pressed = pygame.transform.scale(btn_prs_raw, (BUTTON_SIZE, BUTTON_SIZE))
 
-        icon_size = int(BUTTON_SIZE * 0.55)
+        _fit = BUTTON_SIZE - 8
         raw_build = {
             "Archery":  assets.load_image("assets/Buildings/Blue Buildings/Archery.png"),
             "Barracks": assets.load_image("assets/Buildings/Blue Buildings/Barracks.png"),
@@ -112,8 +112,7 @@ class HUD:
             "Tower":    assets.load_image("assets/Buildings/Blue Buildings/Tower.png"),
         }
         self._build_icons: dict[str, pygame.Surface] = {
-            k: pygame.transform.scale(v, (icon_size // 2, icon_size // 2))
-            for k, v in raw_build.items()
+            k: self._scale_to_fit(v, _fit) for k, v in raw_build.items()
         }
 
     def _get_avatar(self, n: int) -> pygame.Surface:
@@ -155,6 +154,12 @@ class HUD:
         if fill_w > 0:
             texture_cache.get_texture(self._bar_fill).draw(dstrect=(x + cap, fy, fill_w, fh))
 
+    @staticmethod
+    def _scale_to_fit(surf: pygame.Surface, size: int) -> pygame.Surface:
+        w, h = surf.get_size()
+        scale = min(size / w, size / h)
+        return pygame.transform.scale(surf, (max(1, int(w * scale)), max(1, int(h * scale))))
+
     def _can_afford(self, eco: dict, costs: dict) -> bool:
         return all(eco.get(k, 0) >= v for k, v in costs.items())
 
@@ -173,7 +178,7 @@ class HUD:
         icon_h = icon.get_height()
         texture_cache.get_texture(icon).draw(dstrect=(
             rect.x + (rect.w - icon_w) // 2,
-            rect.y + 4,
+            rect.y + (rect.h - icon_h) // 2,
             icon_w, icon_h,
         ))
 
