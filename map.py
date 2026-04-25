@@ -87,9 +87,6 @@ class TileMap:
             return self.tiles[row][col]
         return WATER
 
-    def world_to_tile(self, wx: float, wy: float) -> tuple[int, int]:
-        return int(wx // TILE_SIZE), int(wy // TILE_SIZE)
-
     def is_walkable(self, col: int, row: int) -> bool:
         return self.tile_at(col, row) == GRASS and (col, row) not in self.blocked
 
@@ -139,11 +136,3 @@ class TileMap:
                 return c, ro
         return col, row
 
-    def block_tiles(self, world_x: float, world_y: float, offsets: list[tuple[int, int]]):
-        """Mark specific tile offsets (dc, dr) relative to a world position as unwalkable."""
-        cx = int(world_x // TILE_SIZE)
-        cy = int(world_y // TILE_SIZE)
-        for dc, dr in offsets:
-            col, row = cx + dc, cy + dr
-            if 0 <= col < self.cols and 0 <= row < self.rows:
-                self.blocked.add((col, row))

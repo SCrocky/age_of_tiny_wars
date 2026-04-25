@@ -1,20 +1,10 @@
 import math
-import rendering.entity_renderer as entity_renderer
-from entities.unit import Unit
-from map import TILE_SIZE
+from entities.combat_unit import CombatUnit
 
-ANIM_FPS         = 8
 ATTACK_DAMAGE    = 6
 ATTACK_COOLDOWN  = 0.3
 HIT_DELAY        = 0.1
 DEFENCE_DURATION = 0.5
-
-_LANCER_FRAME_COUNTS: dict[str, int] = {
-    "attack":  3,   # same for all directions
-    "defence": 6,   # same for all directions
-    "idle":    12,
-    "run":     6,
-}
 
 # ---------------------------------------------------------------------------
 # Direction helper — pure math, no pygame
@@ -52,39 +42,28 @@ def _direction(dx: float, dy: float) -> tuple[str, bool]:
 # ---------------------------------------------------------------------------
 
 
-class Lancer(Unit):
+class Lancer(CombatUnit):
     """
     Melee unit with 8-directional attack animations.
     Automatically plays a directional defence animation when struck by melee.
-
-    States (priority order)
-    -----------------------
-    defence – brief block animation triggered by receive_melee_hit()
-    attack  – in melee range of target
-    run     – following a path (move or chase)
-    idle    – standing still
     """
 
-    FRAME_SIZE    = 320
     DISPLAY_SIZE  = 128
     SELECT_RADIUS = 22
     MOVE_SPEED    = 88.0
     ATTACK_RANGE  = 50.0
 
+    FRAME_COUNTS: dict[str, int] = {
+        "attack":  3,
+        "defence": 6,
+        "idle":    12,
+        "run":     6,
+    }
+
     def __init__(self, x: float, y: float, team: str = "blue"):
         super().__init__(x, y, team, max_hp=120)
-
-        self._state:       str   = "idle"
-        self._anim_key:    str   = "idle"
-        self._frame_idx:   int   = 0
-        self._anim_timer:  float = 0.0
-
-        self._dir_key:  str  = "Right"
-        self._flip_dir: bool = False
-
-        self.attack_range: float = self.ATTACK_RANGE
-        self._hit_timer:   float = 0.0
-
+        self._dir_key:       str   = "Right"
+        self._flip_dir:      bool  = False
         self._defence_timer: float = 0.0
         self._def_dir_key:   str   = "Right"
         self._def_flip:      bool  = False
@@ -104,79 +83,35 @@ class Lancer(Unit):
         self._frame_idx     = 0
 
     # ------------------------------------------------------------------
-    # Update  →  returns [] (no projectiles; deals damage directly)
+    # CombatUnit hooks
     # ------------------------------------------------------------------
 
-    def update(self, dt: float, tile_map=None) -> list:
-        self._time += dt
-
+    def _pre_state_tick(self, dt: float):
         if self._defence_timer > 0:
             self._defence_timer -= dt
             self._state = "defence"
             self._tick_animation(dt)
             return []
+        return None
 
-        if self.attack_target is not None:
-            if not self.attack_target.alive:
-                self.attack_target = None
-            else:
-                if self._dist_to_target() <= self.attack_range:
-                    self.path = []
-                    self._state = "attack"
-                    self._update_attack_direction()
-                    self._tick_melee(dt)
-                else:
-                    self._state     = "run"
-                    self._hit_timer = 0.0
-                    self._chase(dt, tile_map)
-
-        elif self.path:
-            self._state = "run"
-            self._move_along_path(dt)
-        else:
-            self._state = "idle"
-
-        self._tick_animation(dt)
-        return []
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _update_attack_direction(self):
+    def _on_enter_attack(self):
         dx = self.attack_target.x - self.x
         dy = self.attack_target.y - self.y
         self._dir_key, self._flip_dir = _direction(dx, dy)
 
-    def _tick_melee(self, dt: float):
+    def _tick_attack(self, dt: float):
         if self._time - self._last_shot_time < ATTACK_COOLDOWN:
-            return
+            return None
 
-        if self._hit_timer == 0.0:
+        if self._action_timer == 0.0:
             self._frame_idx = 0
 
-        self._hit_timer += dt
-        if self._hit_timer >= HIT_DELAY:
+        self._action_timer += dt
+        if self._action_timer >= HIT_DELAY:
             self.attack_target.take_damage(ATTACK_DAMAGE, is_melee=True)
             self.attack_target.receive_melee_hit(self)
             self._last_shot_time = self._time
-            self._hit_timer      = 0.0
+            self._action_timer   = 0.0
             self._frame_idx      = 0
+        return None
 
-    def _tick_animation(self, dt: float):
-        self._anim_key    = self._state
-        self._anim_timer += dt
-        if self._anim_timer >= 1.0 / ANIM_FPS:
-            self._anim_timer -= 1.0 / ANIM_FPS
-            count = _LANCER_FRAME_COUNTS[self._anim_key]
-            if self._state == "attack" and self._frame_idx >= count - 1:
-                pass  # hold last frame until next swing resets to 0
-            else:
-                self._frame_idx = (self._frame_idx + 1) % count
-
-    # ------------------------------------------------------------------
-    # Render
-    # ------------------------------------------------------------------
-
-    def render(self, surface, camera):
-        entity_renderer.render_lancer(self, surface, camera)

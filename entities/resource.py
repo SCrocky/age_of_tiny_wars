@@ -18,6 +18,7 @@ class ResourceNode:
     max_amount:    int = 200
 
     def __init__(self, x: float, y: float):
+        self.entity_id: int = 0
         self.x = x
         self.y = y
         self.amount       = self.max_amount
@@ -57,7 +58,6 @@ class ResourceNode:
 
 class GoldNode(ResourceNode):
     resource_type = "gold"
-    FRAME_W       = 128
     DISPLAY_SIZE  = 96
 
     def __init__(self, x: float, y: float, variant: int = 1):
@@ -73,7 +73,6 @@ class GoldNode(ResourceNode):
 class WoodNode(ResourceNode):
     resource_type = "wood"
     max_amount    = 250
-    FRAME_W       = 192
     DISPLAY_SIZE  = 112
     ANIM_FPS      = 5
 
