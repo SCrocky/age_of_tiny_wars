@@ -55,6 +55,8 @@ class ClientGame:
 
         self._snap_prev:   dict | None = None
         self._snap_curr:   dict | None = None
+        self._snap_prev_by_id: dict[int, dict] = {}
+        self._snap_curr_by_id: dict[int, dict] = {}
         self._t_prev:      float = 0.0
         self._t_curr:      float = 0.0
 
@@ -103,10 +105,12 @@ class ClientGame:
     def _apply_snapshot(self, snap: dict):
         now = time.monotonic()
 
-        self._snap_prev = self._snap_curr
-        self._t_prev    = self._t_curr
-        self._snap_curr = snap
-        self._t_curr    = now
+        self._snap_prev       = self._snap_curr
+        self._snap_prev_by_id = self._snap_curr_by_id
+        self._t_prev          = self._t_curr
+        self._snap_curr       = snap
+        self._snap_curr_by_id = {d["id"]: d for d in snap.get("entities", [])}
+        self._t_curr          = now
 
         eco = snap.get("economy")
         if eco:
@@ -169,14 +173,7 @@ class ClientGame:
         interval = self._t_curr - self._t_prev
         alpha = min(1.0, elapsed / max(0.001, interval))
 
-        eid = proxy.entity_id
-        prev_data = None
-        if self._snap_prev:
-            for d in self._snap_prev.get("entities", []):
-                if d["id"] == eid:
-                    prev_data = d
-                    break
-
+        prev_data = self._snap_prev_by_id.get(proxy.entity_id)
         if prev_data is None:
             return proxy.x, proxy.y
 
@@ -474,8 +471,8 @@ class ClientGame:
         if team == self.player_team:
             return True
         t = type(obj).__name__
-        if t in ("Castle", "Archery", "Barracks", "House", "Tower", "Blueprint",
-                 "GoldNode", "WoodNode"):
+        if t in ("Castle", "Archery", "Barracks", "House", "Tower", "Monastery",
+                 "Blueprint", "GoldNode", "WoodNode"):
             return self.fog.is_explored(obj.x, obj.y, TILE_SIZE)
         return self.fog.is_visible(obj.x, obj.y, TILE_SIZE)
 
