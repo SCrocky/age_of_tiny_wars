@@ -152,7 +152,7 @@ class GameServer:
             print(f"[server] {team} disconnected — pausing game for {RECONNECT_TIMEOUT}s")
             self._writers.pop(team, None)
             self._paused = True
-            asyncio.get_event_loop().create_task(self._reconnect_timeout(team))
+            asyncio.create_task(self._reconnect_timeout(team))
 
     async def _reconnect_timeout(self, team: str):
         deadline = time.monotonic() + RECONNECT_TIMEOUT
