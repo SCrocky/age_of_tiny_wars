@@ -101,9 +101,12 @@ def main():
     window   = Window("Age of Wars — Multiplayer", size=(SCREEN_WIDTH, SCREEN_HEIGHT),
                       fullscreen_desktop=True)
     renderer = Renderer(window, accelerated=1, vsync=True)
-    renderer.logical_size = (SCREEN_WIDTH, SCREEN_HEIGHT)
     clock    = pygame.time.Clock()
     font     = pygame.font.SysFont(None, 36)
+
+    from camera import Viewport
+    win_w, win_h = window.size
+    viewport = Viewport(win_w, win_h, SCREEN_WIDTH, SCREEN_HEIGHT)
 
     import texture_cache
     texture_cache.init(renderer)
@@ -112,7 +115,7 @@ def main():
     renderer.draw_color = (10, 20, 40, 255)
     renderer.clear()
     _blit_text(renderer, font, f"Connecting to {args.host}:{args.port}…",
-               (200, 200, 200), SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+               (200, 200, 200), win_w // 2, win_h // 2)
     renderer.present()
 
     # Start network thread
@@ -144,7 +147,7 @@ def main():
         renderer.draw_color = (10, 20, 40, 255)
         renderer.clear()
         _blit_text(renderer, font, f"Connection failed: {result}",
-                   (200, 80, 80), SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+                   (200, 80, 80), win_w // 2, win_h // 2)
         renderer.present()
         time.sleep(3)
         pygame.quit()
@@ -156,12 +159,12 @@ def main():
     renderer.draw_color = (10, 20, 40, 255)
     renderer.clear()
     _blit_text(renderer, font, "Waiting for game to start…",
-               (200, 200, 200), SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+               (200, 200, 200), win_w // 2, win_h // 2)
     renderer.present()
 
     # Create client game
     from client_game import ClientGame
-    game = ClientGame(renderer, scene, player_team)
+    game = ClientGame(renderer, scene, player_team, viewport)
 
     # Main loop
     running = True

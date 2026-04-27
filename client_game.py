@@ -14,7 +14,7 @@ import time
 import pygame
 from pygame._sdl2.video import Renderer
 
-from camera import Camera, InputSnapshot
+from camera import Camera, InputSnapshot, Viewport
 from map import TileMap, TILE_SIZE
 from rendering.map_renderer import MapRenderer
 from rendering.hud_renderer import HUD
@@ -29,8 +29,10 @@ DRAG_THRESHOLD = 5
 
 
 class ClientGame:
-    def __init__(self, renderer: Renderer, scene: dict, player_team: str):
+    def __init__(self, renderer: Renderer, scene: dict, player_team: str,
+                 viewport: Viewport):
         self.renderer    = renderer
+        self.viewport    = viewport
         self.w           = 1600
         self.h           = 900
         self.player_team = player_team
@@ -42,7 +44,7 @@ class ClientGame:
         self._camera_on_castle = False
 
         self._map_renderer = MapRenderer()
-        self.hud           = HUD(self.w, self.h)
+        self.hud           = HUD(viewport.window_w, viewport.window_h)
 
         self._proxies: dict[int, EntityProxy] = {}
 
@@ -215,8 +217,8 @@ class ClientGame:
             elif event.key == pygame.K_F3:
                 self._show_debug = not self._show_debug
             elif event.key == pygame.K_s:
-                mx, my = self._current_mouse_pos
-                wx, wy = self.camera.screen_to_world(mx, my)
+                lx, ly = self.viewport.to_logical(*self._current_mouse_pos)
+                wx, wy = self.camera.screen_to_world(lx, ly)
                 self._cmd_queue.put({
                     "type":    "CMD_DEV_SPAWN",
                     "world_x": wx,
@@ -233,8 +235,8 @@ class ClientGame:
                     self.camera.y = castle.y - self.h / 2 / self.camera.zoom
 
         elif event.type == pygame.MOUSEWHEEL:
-            mx, my = self._current_mouse_pos
-            self.camera.zoom_at(mx, my, event.y)
+            lx, ly = self.viewport.to_logical(*self._current_mouse_pos)
+            self.camera.zoom_at(lx, ly, event.y)
             self.hud.on_zoom_changed()
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -280,14 +282,14 @@ class ClientGame:
 
     def update(self, dt: float):
         keys = pygame.key.get_pressed()
-        mx, my = self._current_mouse_pos
+        lx, ly = self.viewport.to_logical(*self._current_mouse_pos)
         inp = InputSnapshot(
             pan_left  = bool(keys[pygame.K_LEFT]),
             pan_right = bool(keys[pygame.K_RIGHT]),
             pan_up    = bool(keys[pygame.K_UP]),
             pan_down  = bool(keys[pygame.K_DOWN]),
-            mouse_x   = mx,
-            mouse_y   = my,
+            mouse_x   = lx,
+            mouse_y   = ly,
         )
         self.camera.update(dt, self.map.pixel_width, self.map.pixel_height, inp)
 
@@ -314,7 +316,7 @@ class ClientGame:
         return [e for e in lst if e.team == self.player_team]
 
     def _handle_left_click(self, screen_pos):
-        sx, sy = screen_pos
+        sx, sy = self.viewport.to_logical(*screen_pos)
         all_mine = self._my_entities(include_buildings=True)
         clicked = next(
             (e for e in all_mine if e.hit_test(sx, sy, self.camera)),
@@ -332,8 +334,10 @@ class ClientGame:
     def _handle_box_select(self, start, end):
         if start is None:
             return
-        x1, x2 = min(start[0], end[0]), max(start[0], end[0])
-        y1, y2 = min(start[1], end[1]), max(start[1], end[1])
+        sx1, sy1 = self.viewport.to_logical(*start)
+        sx2, sy2 = self.viewport.to_logical(*end)
+        x1, x2 = min(sx1, sx2), max(sx1, sx2)
+        y1, y2 = min(sy1, sy2), max(sy1, sy2)
         mods = pygame.key.get_mods()
         if not (mods & pygame.KMOD_SHIFT):
             for e in self._my_entities(include_buildings=True):
@@ -349,7 +353,7 @@ class ClientGame:
         if self._pending_build:
             self._emit_build(screen_pos)
             return
-        sx, sy = screen_pos
+        sx, sy = self.viewport.to_logical(*screen_pos)
         wx, wy = self.camera.screen_to_world(sx, sy)
 
         sel_units = [u for u in self._units if u.selected and u.team == self.player_team]
@@ -450,7 +454,7 @@ class ClientGame:
     def _emit_build(self, screen_pos):
         name = self._pending_build
         self._pending_build = None
-        sx, sy = screen_pos
+        sx, sy = self.viewport.to_logical(*screen_pos)
         wx, wy = self.camera.screen_to_world(sx, sy)
         sel_pawns = [p.entity_id for p in self._pawns
                      if p.selected and p.team == self.player_team]
@@ -484,9 +488,11 @@ class ClientGame:
         renderer = self.renderer
         cam      = self.camera
 
+        self.viewport.apply_window(renderer)
         renderer.draw_color = (10, 20, 40, 255)
         renderer.clear()
 
+        self.viewport.apply_world(renderer)
         self._map_renderer.render(self.map, renderer, cam)
 
         margin = 200
@@ -543,6 +549,11 @@ class ClientGame:
                     if e.team == self.player_team]
         self._map_renderer.render_fog(self.fog, self.map, renderer, cam, friendly)
 
+        # Switch to window-pixel space for HUD and overlays.
+        self.viewport.apply_window(renderer)
+        win_w = self.viewport.window_w
+        win_h = self.viewport.window_h
+
         if self._pending_build:
             txt_surf = self._font_hint.render(
                 f"Right-click to place {self._pending_build}  (ESC to cancel)",
@@ -550,7 +561,7 @@ class ClientGame:
             )
             txt_tex = texture_cache.make_texture(txt_surf)
             tw, th  = txt_surf.get_size()
-            txt_tex.draw(dstrect=(self.w // 2 - tw // 2, 56, tw, th))
+            txt_tex.draw(dstrect=(win_w // 2 - tw // 2, 56, tw, th))
 
         self._draw_drag_box()
 
@@ -561,7 +572,7 @@ class ClientGame:
         txt_surf = self._font_team.render(f"You: {self.player_team}", True, col)
         txt_tex  = texture_cache.make_texture(txt_surf)
         tw, th   = txt_surf.get_size()
-        txt_tex.draw(dstrect=(self.w - tw - 10, 10, tw, th))
+        txt_tex.draw(dstrect=(win_w - tw - 10, 10, tw, th))
 
         if not self._connected:
             self._draw_disconnect_overlay()
@@ -570,7 +581,7 @@ class ClientGame:
             rtt_surf = self._font_debug.render(f"RTT: {self._rtt_ms:.0f}ms", True, (200, 200, 200))
             rtt_tex  = texture_cache.make_texture(rtt_surf)
             tw, th   = rtt_surf.get_size()
-            rtt_tex.draw(dstrect=(self.w - tw - 10, 30, tw, th))
+            rtt_tex.draw(dstrect=(win_w - tw - 10, 30, tw, th))
 
         if self._winner:
             self._draw_winner()
@@ -596,21 +607,25 @@ class ClientGame:
 
     def _draw_disconnect_overlay(self):
         renderer = self.renderer
+        win_w = self.viewport.window_w
+        win_h = self.viewport.window_h
         renderer.draw_blend_mode = pygame.BLENDMODE_BLEND
         renderer.draw_color = (40, 0, 0, 180)
-        renderer.fill_rect(pygame.Rect(0, self.h // 2 - 30, self.w, 60))
+        renderer.fill_rect(pygame.Rect(0, win_h // 2 - 30, win_w, 60))
         renderer.draw_blend_mode = pygame.BLENDMODE_NONE
         font     = pygame.font.SysFont(None, 36)
         txt_surf = font.render("Connection lost — reconnecting…", True, (255, 180, 80))
         txt_tex  = texture_cache.make_texture(txt_surf)
         tw, th   = txt_surf.get_size()
-        txt_tex.draw(dstrect=(self.w // 2 - tw // 2, self.h // 2 - th // 2, tw, th))
+        txt_tex.draw(dstrect=(win_w // 2 - tw // 2, win_h // 2 - th // 2, tw, th))
 
     def _draw_winner(self):
         renderer = self.renderer
+        win_w = self.viewport.window_w
+        win_h = self.viewport.window_h
         renderer.draw_blend_mode = pygame.BLENDMODE_BLEND
         renderer.draw_color = (0, 0, 0, 140)
-        renderer.fill_rect(pygame.Rect(0, 0, self.w, self.h))
+        renderer.fill_rect(pygame.Rect(0, 0, win_w, win_h))
         renderer.draw_blend_mode = pygame.BLENDMODE_NONE
         font = pygame.font.SysFont(None, 80)
         if self._winner == self.player_team:
@@ -619,4 +634,4 @@ class ClientGame:
             txt_surf = font.render("Defeat", True, (200, 80, 80))
         txt_tex = texture_cache.make_texture(txt_surf)
         tw, th  = txt_surf.get_size()
-        txt_tex.draw(dstrect=(self.w // 2 - tw // 2, self.h // 2 - th // 2, tw, th))
+        txt_tex.draw(dstrect=(win_w // 2 - tw // 2, win_h // 2 - th // 2, tw, th))

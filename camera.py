@@ -1,6 +1,37 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+import pygame
+
+
+class Viewport:
+    """Maps the game's logical 1600×900 world into a centred sub-rect of the
+    actual OS window, leaving any letterbox/pillarbox space free for HUD use."""
+
+    def __init__(self, window_w: int, window_h: int,
+                 logical_w: int, logical_h: int):
+        scale = min(window_w / logical_w, window_h / logical_h)
+        self.window_w  = window_w
+        self.window_h  = window_h
+        self.logical_w = logical_w
+        self.logical_h = logical_h
+        self.scale     = scale
+        self.w         = int(logical_w * scale)
+        self.h         = int(logical_h * scale)
+        self.x         = (window_w - self.w) // 2
+        self.y         = (window_h - self.h) // 2
+
+    def to_logical(self, wx: float, wy: float) -> tuple[float, float]:
+        return (wx - self.x) / self.scale, (wy - self.y) / self.scale
+
+    def apply_world(self, renderer):
+        renderer.set_viewport(pygame.Rect(self.x, self.y, self.w, self.h))
+        renderer.scale = (self.scale, self.scale)
+
+    def apply_window(self, renderer):
+        renderer.set_viewport(pygame.Rect(0, 0, self.window_w, self.window_h))
+        renderer.scale = (1.0, 1.0)
+
 
 @dataclass
 class InputSnapshot:
