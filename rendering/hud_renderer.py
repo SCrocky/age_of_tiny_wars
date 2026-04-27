@@ -223,7 +223,7 @@ class HUD:
         return None
 
     # ------------------------------------------------------------------
-    # Resource panel (top-left)
+    # Resource panel (top-right)
     # ------------------------------------------------------------------
 
     def _draw_resources(self, renderer: Renderer, eco: dict):
@@ -233,17 +233,19 @@ class HUD:
         row_h = s + pad
         pw    = 160
         ph    = row_h * 4 + c + pad
-        self._draw_panel(renderer, pad, pad, pw, ph)
+        px    = self.sw - pw - pad
+        py    = pad
+        self._draw_panel(renderer, px, py, pw, ph)
         for i, key in enumerate(("gold", "wood", "meat")):
-            rx  = pad + c
-            ry  = pad + c + i * row_h
+            rx  = px + c
+            ry  = py + c + i * row_h
             texture_cache.get_texture(self._icons[key]).draw(dstrect=(rx, ry, s, s))
             txt_surf = self._font.render(str(eco[key]), True, (255, 235, 180))
             txt_tex  = texture_cache.make_texture(txt_surf)
             tw, th   = txt_surf.get_size()
             txt_tex.draw(dstrect=(rx + s + 6, ry + (s - th) // 2, tw, th))
-        rx  = pad + c
-        ry  = pad + c + 3 * row_h
+        rx  = px + c
+        ry  = py + c + 3 * row_h
         texture_cache.get_texture(self._icons["pop"]).draw(dstrect=(rx, ry, s, s))
         pop_txt = f"{eco.get('pop', 0)}/{eco.get('pop_cap', 0)}"
         col  = (200, 80, 80) if eco.get('pop', 0) >= eco.get('pop_cap', 1) else (255, 235, 180)
