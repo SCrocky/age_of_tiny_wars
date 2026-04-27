@@ -18,6 +18,7 @@ from camera import Camera, InputSnapshot, Viewport
 from map import TileMap, TILE_SIZE
 from rendering.map_renderer import MapRenderer
 from rendering.hud_renderer import HUD
+from rendering.minimap import Minimap
 
 import rendering.entity_renderer as entity_renderer
 import texture_cache
@@ -45,6 +46,7 @@ class ClientGame:
 
         self._map_renderer = MapRenderer()
         self.hud           = HUD(viewport.window_w, viewport.window_h)
+        self.minimap       = Minimap(viewport.window_w, viewport.window_h)
 
         self._proxies: dict[int, EntityProxy] = {}
 
@@ -71,6 +73,7 @@ class ClientGame:
 
         self._drag_start: tuple[int, int] | None = None
         self._dragging:   bool = False
+        self._minimap_drag: bool = False
         self._pending_build: str | None = None
         self._current_mouse_pos: tuple[int, int] = (0, 0)
         self.debug: bool = False
@@ -241,6 +244,9 @@ class ClientGame:
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
+                if self._handle_minimap_click(event.pos):
+                    self._minimap_drag = True
+                    return
                 self._drag_start = event.pos
                 self._dragging   = False
             elif event.button == 3:
@@ -248,6 +254,9 @@ class ClientGame:
 
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1:
+                if self._minimap_drag:
+                    self._minimap_drag = False
+                    return
                 if self._dragging:
                     self._handle_box_select(self._drag_start, event.pos)
                 else:
@@ -274,7 +283,9 @@ class ClientGame:
                 self._dragging   = False
 
         elif event.type == pygame.MOUSEMOTION:
-            if self._drag_start:
+            if self._minimap_drag:
+                self._handle_minimap_click(event.pos)
+            elif self._drag_start:
                 dx = event.pos[0] - self._drag_start[0]
                 dy = event.pos[1] - self._drag_start[1]
                 if dx * dx + dy * dy > DRAG_THRESHOLD ** 2:
@@ -283,6 +294,12 @@ class ClientGame:
     def update(self, dt: float):
         keys = pygame.key.get_pressed()
         lx, ly = self.viewport.to_logical(*self._current_mouse_pos)
+        over_minimap = self.minimap.hit_test(
+            self._current_mouse_pos[0], self._current_mouse_pos[1],
+            self.map.pixel_width, self.map.pixel_height,
+        ) is not None
+        if over_minimap:
+            lx, ly = self.w / 2, self.h / 2
         inp = InputSnapshot(
             pan_left  = bool(keys[pygame.K_LEFT]),
             pan_right = bool(keys[pygame.K_RIGHT]),
@@ -314,6 +331,19 @@ class ClientGame:
         if include_buildings:
             lst = lst + self._buildings
         return [e for e in lst if e.team == self.player_team]
+
+    def _handle_minimap_click(self, screen_pos) -> bool:
+        """If the click hits the minimap, recentre the camera on that world
+        point and return True. While dragging, this is called every motion
+        event to keep the camera following the cursor."""
+        hit = self.minimap.hit_test(screen_pos[0], screen_pos[1],
+                                    self.map.pixel_width, self.map.pixel_height)
+        if hit is None:
+            return False
+        wx, wy = hit
+        self.camera.x = wx - self.w / 2 / self.camera.zoom
+        self.camera.y = wy - self.h / 2 / self.camera.zoom
+        return True
 
     def _handle_left_click(self, screen_pos):
         sx, sy = self.viewport.to_logical(*screen_pos)
@@ -567,6 +597,15 @@ class ClientGame:
 
         all_selectable = self._units + self._pawns + self._buildings
         self.hud.draw(renderer, self.economy, all_selectable, self.player_team)
+
+        minimap_entities = (self._buildings + self._units + self._pawns
+                            + self._resources)
+        self.minimap.draw(
+            renderer, self._map_renderer._tile_tex,
+            self.map.pixel_width, self.map.pixel_height,
+            self.camera, minimap_entities, self.player_team,
+            self._fog_visible,
+        )
 
         col = (80, 140, 255) if self.player_team == "blue" else (60, 60, 60)
         txt_surf = self._font_team.render(f"You: {self.player_team}", True, col)
