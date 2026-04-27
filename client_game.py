@@ -294,11 +294,12 @@ class ClientGame:
     def update(self, dt: float):
         keys = pygame.key.get_pressed()
         lx, ly = self.viewport.to_logical(*self._current_mouse_pos)
+        mx, my = self._current_mouse_pos
         over_minimap = self.minimap.hit_test(
-            self._current_mouse_pos[0], self._current_mouse_pos[1],
-            self.map.pixel_width, self.map.pixel_height,
+            mx, my, self.map.pixel_width, self.map.pixel_height,
         ) is not None
-        if over_minimap:
+        over_hud = self.hud.hit_test(mx, my)
+        if over_minimap or over_hud:
             lx, ly = self.w / 2, self.h / 2
         inp = InputSnapshot(
             pan_left  = bool(keys[pygame.K_LEFT]),

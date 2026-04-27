@@ -65,6 +65,7 @@ class HUD:
         self._avatars: dict[int, pygame.Surface] = {}
         self._btn_avatars: dict[int, pygame.Surface] = {}
         self._buttons: list[tuple[pygame.Rect, str]] = []
+        self._panels:  list[pygame.Rect] = []
         self._load()
 
     # ------------------------------------------------------------------
@@ -210,6 +211,7 @@ class HUD:
     def draw(self, renderer: Renderer, economy: dict, all_entities: list,
              player_team: str = "blue"):
         self._buttons = []
+        self._panels  = []
         self._draw_resources(renderer, economy[player_team])
         selected = [e for e in all_entities
                     if e.selected and getattr(e, "team", None) == player_team]
@@ -221,6 +223,9 @@ class HUD:
             if rect.collidepoint(mx, my):
                 return action
         return None
+
+    def hit_test(self, mx: int, my: int) -> bool:
+        return any(p.collidepoint(mx, my) for p in self._panels)
 
     # ------------------------------------------------------------------
     # Resource panel (top-right)
@@ -236,6 +241,7 @@ class HUD:
         px    = self.sw - pw - pad
         py    = pad
         self._draw_panel(renderer, px, py, pw, ph)
+        self._panels.append(pygame.Rect(px, py, pw, ph))
         for i, key in enumerate(("gold", "wood", "meat")):
             rx  = px + c
             ry  = py + c + i * row_h
@@ -269,6 +275,7 @@ class HUD:
         px       = (self.sw - pw) // 2
         py       = self.sh - ph - pad
         self._draw_panel(renderer, px, py, pw, ph)
+        self._panels.append(pygame.Rect(px, py, pw, ph))
         if len(selected) == 1:
             self._draw_single(renderer, selected[0], px, py, pw, ph_info, eco)
         else:
