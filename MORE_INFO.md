@@ -1,33 +1,44 @@
 # Age of Wars
 
-A medieval top-down 2D real-time strategy game built with Python and Pygame. Supports both single-player and 2-player LAN multiplayer.
+A medieval top-down 2D real-time strategy game built with Python and Pygame.
+Supports up to 5 players in a free-for-all match — any mix of humans (over LAN)
+and rule-based AI opponents.
 
 ---
 
 ## Getting Started
 
-### Single Player
+The game is split into a dedicated server and a thin rendering client. There is
+no separate single-player binary — single-player is just one human seat plus AI
+seats running on the same machine.
+
+### Single Player (vs AI)
 
 ```bash
-pip install pygame msgpack
-python main.py
+pip install -r requirements.txt
+python server_main.py --players blue=human,black=ai
+python client_main.py
 ```
 
 ### Multiplayer (LAN)
 
 **On the host machine:**
 ```bash
-python server_main.py --scene map_editor/maps/<scene>.json
+python server_main.py --players blue=human,red=human,yellow=human
 ```
 
-**On each client (run twice, once per player):**
+**On each client:**
 ```bash
 python client_main.py --host <server-ip> --port 9876
 ```
 
-The first client to connect plays Blue; the second plays Black. The game starts automatically once both players are connected.
+Connection order maps to the team order in `--players`: the first client to
+connect takes the first `human` seat, the second takes the second, and so on.
+`ai` seats are filled automatically by an in-process bot. The match starts as
+soon as every human seat is connected.
 
-The game auto-generates a procedural map on startup. Blue faction is player-controlled; Black is the opponent.
+The server auto-generates a procedural map sized for the configured player
+count, or you can pass `--scene path/to/scene.json` to use an existing map.
 
 ---
 
@@ -36,10 +47,15 @@ The game auto-generates a procedural map on startup. Blue faction is player-cont
 | Aspect | Decision |
 |---|---|
 | Perspective | Top-down 2D pixel art (chibi style) |
-| Scope | 1-player or 2-player LAN PvP, full RTS economy + combat |
+| Scope | 2–5 player FFA, full RTS economy + combat |
 | Theme | Medieval |
-| Factions | Black, Blue, Purple color variants |
+| Factions | 5 team colors: blue, red, yellow, purple, black |
 | Resources | Gold, Wood, Meat |
+| Default match | `blue=human,black=human` (1v1 multiplayer) |
+
+Players are interchangeable: every team has identical units, buildings, and
+costs, distinguished only by sprite tint. Victory is last team standing — when
+exactly one team still has a Castle, that team wins.
 
 ---
 
@@ -48,9 +64,10 @@ The game auto-generates a procedural map on startup. Blue faction is player-cont
 | Unit | Role |
 |---|---|
 | Pawn | Worker — gathers Gold, Wood, Meat; constructs buildings |
-| Archer | Ranged attacker |
+| Archer | Ranged attacker; fires homing Arrow projectiles |
 | Lancer | Fast melee attacker with 8-directional attacks |
-| Warrior | Melee tank with a guard mechanic that reduces incoming damage |
+| Warrior | Melee tank with a guard mechanic that blocks the first hit per swing |
+| Monk | Support — automatically heals nearby allied units |
 
 ---
 
@@ -58,18 +75,26 @@ The game auto-generates a procedural map on startup. Blue faction is player-cont
 
 | Building | Purpose |
 |---|---|
-| Castle | Main base, spawns Pawns, resource depot, increases population cap |
+| Castle | Main base; spawns Pawns, resource depot, +10 pop cap, lose this and you're out |
+| House | Resource depot, +5 pop cap, three visual variants |
 | Archery | Trains Archers |
 | Barracks | Trains Lancers and Warriors |
-| House | Extra resource depot, increases population cap (3 variants) |
+| Monastery | Trains Monks |
+| Tower | Defensive structure; garrison an Archer for extended range and damage |
 
-**Construction**: Select a Pawn, choose a building from the HUD, then right-click to place a blueprint. Multiple Pawns can build simultaneously; the building activates when complete.
+**Construction**: Select a Pawn, choose a building from the HUD, then
+right-click to place a blueprint. Multiple Pawns can contribute simultaneously;
+the building activates when the blueprint reaches full health.
+
+**Garrisoning**: Right-click a friendly Tower with an Archer selected to send
+the Archer inside. While garrisoned, the Archer's range, fire rate, and arrow
+damage are roughly doubled. Releasing puts the Archer back at the tower's foot.
 
 ---
 
 ## Resources
 
-| Resource | Source | Tool |
+| Resource | Source | Pawn tool |
 |---|---|---|
 | Gold | Gold stone nodes (multiple size variants) | Pickaxe |
 | Wood | Trees (→ Stump when depleted) | Axe |
@@ -81,32 +106,42 @@ The game auto-generates a procedural map on startup. Blue faction is player-cont
 
 | Input | Action |
 |---|---|
-| Left-click | Select unit or building |
-| Shift + Left-click | Toggle selection |
+| Left-click | Select unit / building |
+| Shift + left-click | Toggle selection |
 | Left-click drag | Box-select multiple units |
 | Right-click (empty) | Move selected units |
 | Right-click (enemy) | Attack |
 | Right-click (resource) | Gather (Pawns only) |
+| Right-click (own Tower with Archer selected) | Garrison the Archer |
+| Right-click (own Blueprint with Pawn selected) | Assign Pawn to construction |
 | Arrow keys / edge scroll | Pan camera |
-| Mouse wheel | Zoom |
+| Mouse wheel | Zoom (anchored on cursor) |
+| H | Centre camera on your Castle |
+| ESC | Cancel pending build / quit |
 | HUD buttons | Train units / construct buildings |
-| F3 | Toggle debug overlay (ping, tick) |
+| F3 | Toggle debug overlay (RTT) |
+| D | Toggle entity debug overlay |
 
 ---
 
 ## Core Systems
 
-**Game Loop**
-- Fixed timestep update; entities advance by elapsed time each frame.
+**Game loop**
+- 60 Hz authoritative tick on the server; 10 Hz snapshot broadcast to clients;
+  60 Hz interpolated render on each client.
 
-**Map & Camera**
+**Map & camera**
 - Tile-based grid with GRASS and WATER terrain types and per-tile walkability.
-- Camera supports keyboard pan, edge scrolling, and mouse-wheel zoom (zoom is anchored to the cursor's world position).
-- Tile render cache — only visible tiles are drawn, scaled to the current zoom level.
+- Camera supports keyboard pan, edge scrolling, and mouse-wheel zoom.
+- `MapRenderer` keeps a tile texture cache so only visible tiles are drawn.
 
 **Entities**
-- `Entity` → `Unit` (moving/fighting) / `Building` (static/production) / `Resource` (gatherable)
-- Sprite surfaces are cached by transform (scale + flip) to avoid redundant scaling.
+- `Entity` → `Unit` → `CombatUnit` (Archer/Lancer/Warrior) / `Monk` / `Pawn`
+- `Entity` → `Building` (Castle/House/Archery/Barracks/Monastery/Tower)
+- `Entity` → `Resource` (GoldNode/WoodNode/MeatNode) and `Blueprint` and
+  `Arrow` (projectile)
+- Sprite surfaces are loaded directly from the Tiny Swords zip via `assets.py`
+  and cached as SDL textures by `texture_cache.py`.
 
 **Pathfinding**
 - A* on the 8-directional tile grid with an octile heuristic.
@@ -114,63 +149,130 @@ The game auto-generates a procedural map on startup. Blue faction is player-cont
 - Units re-path periodically while chasing a moving target.
 - Soft-repulsion separation keeps units from stacking on top of each other.
 
-**Selection & Commands**
-- Click to select; drag to box-select multiple units.
-- Right-click dispatch: attack / gather / move based on what was clicked.
-- Group movement fans units in concentric rings around the destination.
+**Selection & commands**
+- Click to select; drag to box-select; Shift toggles selection.
+- Right-click dispatch: Garrison / Attack / Gather / Build / Move based on
+  what the cursor is over.
+- Group movement fans units out in concentric rings around the destination.
 
 **Economy**
-- Per-team Gold / Wood / Meat counters.
-- Population cap is the sum of all living Castles and Houses.
-- Pawns cycle through gather → carry → deposit; any living Castle or House acts as a depot.
+- Per-team Gold / Wood / Meat counters; everyone starts with 60 of each.
+- Population cap is the sum of `pop_bonus` over each team's living Castles
+  (+10) and Houses (+5).
+- Pawns cycle through gather → carry → deposit; any living Castle or House
+  acts as a depot.
 
 **Combat**
 - Archer: fires a homing Arrow projectile.
-- Lancer: 8-directional attack animations; plays a directional defence animation when hit.
-- Warrior: alternates two attack animations; guard mechanic halves damage on the first hit within each attack cooldown.
+- Lancer: 8-directional attack and defence animations.
+- Warrior: alternates two attack animations; guard mechanic blocks the first
+  hit within each attack cooldown.
+- Monk: pure support — auto-heals the nearest wounded ally within range.
+- Tower: when an Archer is garrisoned, the tower fires arrows with extended
+  range, ~2× damage, and a faster cooldown.
 
 **Production**
-- Buildings hold a single production queue slot.
-- Trained units spawn in an arc around the building entrance.
+- Buildings spawn units instantly when their team can afford the cost.
+- Trained units appear at a random angle within a short radius of the
+  building.
 
-**Blueprint System**
+**Blueprints**
 - Blueprints render with increasing opacity as construction progresses.
-- Multiple Pawns can contribute simultaneously; the building activates at full health.
+- Multiple Pawns can contribute simultaneously; the building activates when
+  the blueprint reaches full health.
+
+**Fog of war**
+- Per-team visibility computed from each unit/building's vision radius.
+- Buildings and resources are remembered (explored) once seen; units only
+  show inside the current visible area.
+
+---
+
+## Match Setup
+
+`server_main.py` takes a single `--players` flag describing every seat. Each
+token is `team=role`:
+
+- `team`: one of `blue`, `red`, `yellow`, `purple`, `black` — must be unique
+- `role`: `human` or `ai`
+- 2–5 seats are supported
+
+Examples:
+
+```bash
+# 1 human vs 3 AI
+python server_main.py --players blue=human,red=ai,yellow=ai,purple=ai
+
+# Five-way FFA (all humans)
+python server_main.py --players blue=human,red=human,yellow=human,purple=human,black=human
+
+# All-AI match for spectating
+python server_main.py --players blue=ai,red=ai,yellow=ai,purple=ai,black=ai
+```
+
+Default with no flag is `blue=human,black=human` (multiplayer 1v1).
 
 ---
 
 ## Multiplayer Architecture
 
-Multiplayer uses a **dedicated authoritative server** model: the server runs the full simulation headlessly and broadcasts state snapshots to thin rendering clients.
-
 ```
-server_main.py              client_main.py (×2)
-└─ GameServer               └─ ClientGame
-     ├─ game.py (auth sim)       ├─ camera.py (local pan/zoom)
-     │    └─ pathfinding.py      ├─ hud.py (player_team-aware)
-     └─ asyncio TCP :9876        ├─ rendering/ (fed EntityProxy)
-          └─ msgpack snapshots   └─ network/client.py
+server_main.py                       client_main.py (×N humans)
+└─ GameServer                        └─ ClientGame
+     ├─ game.py (auth sim)                ├─ camera.py (local pan/zoom)
+     │    └─ systems/pathfinding.py       ├─ rendering/hud_renderer.py
+     ├─ asyncio TCP :9876                 ├─ rendering/map_renderer.py
+     │    └─ msgpack snapshots            ├─ rendering/entity_renderer.py
+     └─ AIPlayer per ai seat              ├─ rendering/minimap.py
+          └─ ai/bot.py                    ├─ systems/fog.py
+                                          └─ network/client.py
 ```
 
-- **Protocol**: TCP with 4-byte big-endian length-prefix framing; msgpack serialization.
-- **Snapshots**: Full game state broadcast at 10 Hz; clients interpolate at 60 Hz.
-- **Commands**: Clients send `CMD_MOVE`, `CMD_ATTACK`, `CMD_GATHER`, `CMD_SPAWN`, `CMD_BUILD`; the server applies them authoritatively.
-- **Victory**: Game ends when either Castle is destroyed; both clients display the result.
-- **Disconnect**: Server pauses for up to 30 seconds to allow reconnection; if the player doesn't return, the remaining player wins.
+- **Authoritative server**: Runs the full simulation headlessly. No client
+  ever advances state — all command results are observed via snapshots.
+- **Wire protocol**: TCP with 4-byte big-endian length-prefix framing;
+  msgpack payloads in both directions.
+- **Snapshots**: Full game state broadcast at 10 Hz; clients interpolate
+  positions between consecutive snapshots at 60 Hz for smooth motion.
+- **Commands**: Clients send `CMD_MOVE`, `CMD_ATTACK`, `CMD_GATHER`,
+  `CMD_SPAWN`, `CMD_BUILD`, `CMD_ASSIGN_BUILD`, `CMD_GARRISON`, `CMD_RELEASE`,
+  `CMD_DEV_SPAWN`. The server queues them and applies on the next tick.
+- **AI players**: Each `ai` seat is wired in-process via `AIPlayer`, which
+  fakes a TCP `(reader, writer, team)` triple. AI logic lives in `ai/bot.py`
+  and consumes the same `GAME_STATE` snapshots as humans.
+- **Victory**: `_check_victory` returns the surviving team when exactly one
+  team still has a living Castle. Game loop broadcasts `GAME_OVER` and exits.
+- **Disconnect / forfeit**: When a client drops, the server pauses for up to
+  30 seconds to allow reconnection. After the timeout, the team's Castles are
+  destroyed; with 2 teams the survivor wins, with N>2 the remaining teams
+  keep playing until one is left.
 
 ---
 
 ## Procedural Map Generation
 
-`map_editor/create_map.py` generates maps using a Wave Function Collapse zone algorithm:
+`map_editor/create_map.py` generates maps using a Wave Function Collapse zone
+algorithm:
 
-1. Divides the interior into a grid of zones.
-2. Two diagonal spawn zones (Blue top-left, Black bottom-right) seed the collapse.
-3. Adjacency rules bias resource-rich zones near spawns and prevent same-type blobs.
-4. Resources are placed in clumps (wood clusters; gold and meat scattered).
+1. Splits the interior into a 10×6 zone grid.
+2. Spawn cells are picked from a fixed table indexed by player count
+   (`_SPAWN_LAYOUTS`): opposite corners for N=2, a triangle for N=3, four
+   corners for N=4, four corners + centre for N=5.
+3. Adjacency rules bias resource-rich zones near spawns and prevent same-type
+   blobs from forming.
+4. Resources are placed in clumps — wood as line-arranged forest clusters,
+   gold and meat scattered.
 5. Outputs a JSON map file and a PNG preview.
 
-`map_editor/populate_map.py` adds starting buildings and Pawns to a generated map, producing the scene JSON that the game loads.
+`map_editor/populate_map.py` adds starting buildings and Pawns to a generated
+map (one Castle and three Pawns per spawn) and produces the scene JSON that
+the server loads.
+
+Both scripts accept `--teams` to pick which colors get spawn points:
+
+```bash
+python map_editor/create_map.py --teams red,yellow,purple
+```
 
 ---
 
@@ -178,68 +280,93 @@ server_main.py              client_main.py (×2)
 
 ```
 age_of_tiny_wars/
-├── main.py               # Single-player entry point
-├── server_main.py        # Dedicated server entry point
-├── client_main.py        # Multiplayer client entry point
-├── game.py               # Central state: entities, input, update, render pipeline
-├── client_game.py        # Client-side rendering-only game (no simulation)
-├── map.py                # Tile map, terrain, walkability, render cache
+├── server_main.py        # Server entry: --players parsing, scene gen, AI wiring
+├── client_main.py        # Client entry: window/network thread, ClientGame loop
+├── game.py               # Authoritative simulation: entities, update, economy
+├── client_game.py        # Client-side rendering state — no simulation logic
+├── map.py                # Tile map, terrain, walkability
 ├── camera.py             # Viewport pan/zoom, world↔screen coordinate conversion
-├── hud.py                # Resource bar, unit/building info panel, production buttons
-├── render_cache.py       # Scaled/flipped surface cache
+├── assets.py             # Loads images directly from the Tiny Swords zip
+├── texture_cache.py      # Surface → SDL2 texture cache
+│
+├── ai/
+│   └── bot.py            # Rule-based AI: gather, train, build, attack
+│
 ├── entities/
-│   ├── entity.py         # Base class: position, HP, team, health bar
-│   ├── unit.py           # Base mover: A* pathfinding, attack targeting, animation
-│   ├── pawn.py           # Worker: gather→carry→deposit state machine, build
+│   ├── teams.py          # The 5 team colors and avatar/banner mappings
+│   ├── entity.py         # Base class: position, HP, team
+│   ├── unit.py           # Base mover: pathfinding, animation
+│   ├── combat_unit.py    # Shared combat behaviour (Archer/Lancer/Warrior)
+│   ├── pawn.py           # Worker: gather → carry → deposit, build
 │   ├── archer.py         # Ranged: fires Arrow projectiles
-│   ├── lancer.py         # Melee: 8-directional attack/defence animations
-│   ├── warrior.py        # Tank: guard mechanic, high HP
-│   ├── building.py       # Castle, Archery, Barracks, House + production logic
+│   ├── lancer.py         # Melee: 8-directional attack/defence
+│   ├── warrior.py        # Tank: guard mechanic, two-swing animation
+│   ├── monk.py           # Support: auto-heals nearby allies
+│   ├── building.py       # Castle, House, Archery, Barracks, Monastery, Tower
 │   ├── resource.py       # GoldNode, WoodNode, MeatNode (sheep AI)
 │   ├── projectile.py     # Arrow: homing, snap-to-hit
-│   └── blueprint.py      # Building under construction, alpha-blended render
+│   └── blueprint.py      # Building under construction
+│
 ├── network/
-│   ├── __init__.py
 │   ├── headless.py       # SDL dummy driver init for server-side pygame
-│   ├── lobby.py          # Waits for 2 TCP clients, assigns teams, fires GAME_START
-│   ├── server.py         # GameServer: authoritative simulation + snapshot broadcast
+│   ├── lobby.py          # Waits for human clients, assigns teams, fires GAME_START
+│   ├── server.py         # GameServer: simulation + snapshot broadcast
 │   ├── client.py         # Async TCP client with reconnect support
+│   ├── ai_player.py      # AI seat: in-memory reader/writer wrapping a BotAI
 │   ├── serialization.py  # msgpack encode/decode for snapshots and commands
-│   └── render_proxy.py   # EntityProxy duck-typed wrappers for client-side rendering
+│   └── render_proxy.py   # EntityProxy duck-typed wrappers for client rendering
+│
+├── rendering/
+│   ├── map_renderer.py   # Tile rendering + per-team fog overlay
+│   ├── entity_renderer.py# Building/unit/resource sprite drawing
+│   ├── hud_renderer.py   # Resource bar, selection panel, build/train buttons
+│   └── minimap.py        # Compact map overview with click-to-pan
+│
 ├── systems/
-│   └── pathfinding.py    # A* with octile heuristic, corner-cut prevention
+│   ├── pathfinding.py    # A* with octile heuristic, corner-cut prevention
+│   └── fog.py            # Per-team visible/explored tile masks
+│
 ├── map_editor/
 │   ├── create_map.py     # Procedural WFC map generator → JSON + PNG
 │   ├── populate_map.py   # Adds starting buildings/units to a map
 │   └── maps/             # Generated map files
-└── assets/               # Sprites (Buildings/, Units/, Terrain/, UI_Elements/)
+│
+├── downloaded_assets/
+│   └── Tiny Swords (Free Pack).zip   # Asset pack, read directly (not extracted)
+│
+└── screenshots/          # Reference images for development
 ```
 
 ---
 
 ## Asset Structure
 
+All sprites are loaded directly from `downloaded_assets/Tiny Swords (Free Pack).zip`
+via `assets.py`. The expected layout inside the zip:
+
 ```
 assets/
 ├── Buildings/
-│   ├── Black Buildings/    # Castle, Barracks, Archery, House1-3
-│   ├── Blue Buildings/
-│   └── Purple Buildings/
+│   ├── Blue Buildings/      # Castle, Archery, Barracks, House1-3, Monastery, Tower
+│   ├── Red Buildings/
+│   ├── Yellow Buildings/
+│   ├── Purple Buildings/
+│   └── Black Buildings/
 ├── Units/
-│   ├── Black Units/
-│   │   ├── Archer/         # Idle, Run, Shoot, Arrow
-│   │   ├── Lancer/         # Idle, Run, Attack×8dirs, Defence×8dirs
-│   │   ├── Warrior/        # Idle, Run, Attack1, Attack2
-│   │   └── Pawn/           # Idle, Run, Interact per tool (Axe/Pickaxe/Knife/Hammer)
-│   ├── Blue Units/
-│   └── Purple Units/
+│   ├── <Color> Units/
+│   │   ├── Archer/          # Idle, Run, Shoot
+│   │   ├── Lancer/          # Idle, Run, Attack×8 dirs, Defence×8 dirs
+│   │   ├── Warrior/         # Idle, Run, Attack1, Attack2
+│   │   ├── Monk/            # Idle, Run, Heal
+│   │   └── Pawn/            # Idle, Run + tool variants (Axe / Pickaxe / Knife / Hammer)
+│   └── … one folder per team color
 ├── Terrain/
-│   ├── Tileset/            # Tilemap color variants, Water Background, Water Foam
+│   ├── Tileset/             # Tilemap color variants, water background, water foam
 │   └── Resources/
-│       ├── Gold/           # Gold_Resource, Gold Stones variants (+ Highlight variants)
-│       ├── Wood/           # Tree variants, Stump variants
-│       └── Meat/           # Sheep_Idle, Sheep_Move, Sheep_Grass
-└── UI_Elements/
+│       ├── Gold/            # Gold stones (variants + highlights)
+│       ├── Wood/            # Trees + stumps
+│       └── Meat/            # Sheep idle/move/grass
+└── UI_Elements/             # HUD avatars, banners, button frames
 ```
 
 ---
@@ -248,11 +375,14 @@ assets/
 
 | # | Milestone | Status |
 |---|---|---|
-| 1 | Foundation: game loop, tile map, camera, sprites on screen | ✅ Done |
+| 1 | Foundation: game loop, tile map, camera, sprites | ✅ Done |
 | 2 | Units: animated units, A* pathfinding, click-to-move | ✅ Done |
-| 3 | Combat: selection box, attack commands, health bars, death | ✅ Done |
-| 4 | Economy: Pawn gathering, resource counters, Castle drop-off | ✅ Done |
-| 5 | Buildings: place/train from buildings, population cap | ✅ Done |
-| 6 | Multiplayer: 2-player LAN PvP via dedicated authoritative server | ✅ Done |
-| 7 | AI: opponent gathers, trains units, and attacks player | 🔲 Planned |
-| 8 | Polish: minimap, sounds | 🔲 Planned |
+| 3 | Combat: selection, attack commands, health bars, death | ✅ Done |
+| 4 | Economy: Pawn gathering, resource counters, drop-off | ✅ Done |
+| 5 | Buildings: place/train, blueprints, population cap | ✅ Done |
+| 6 | Multiplayer: 2-player LAN PvP via authoritative server | ✅ Done |
+| 7 | Fog of war: per-team visibility & exploration | ✅ Done |
+| 8 | AI opponent: gather, train, build, attack | ✅ Done |
+| 9 | Tower garrison + Monk support unit | ✅ Done |
+| 10 | Multi-team support: 2–5 player FFA, any color mix | ✅ Done |
+| 11 | Polish: sounds, music, victory cinematic | 🔲 Planned |
