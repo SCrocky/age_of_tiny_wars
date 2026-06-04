@@ -154,21 +154,24 @@ def _serialize_entity(entity) -> dict:
     return base
 
 
-def serialize_snapshot(game, tick: int, paused: bool = False) -> bytes:
+def build_snapshot(game, tick: int, paused: bool = False) -> dict:
+    """Build the snapshot dict without encoding."""
     entities = []
     for lst in (game.buildings, game.blueprints, game.units, game.pawns,
                 game.arrows, game.resources):
         for e in lst:
             entities.append(_serialize_entity(e))
-
-    snapshot = {
+    return {
         "type":     "GAME_STATE",
         "tick":     tick,
         "paused":   paused,
         "economy":  game.economy,
         "entities": entities,
     }
-    return encode_frame(snapshot)
+
+
+def serialize_snapshot(game, tick: int, paused: bool = False) -> bytes:
+    return encode_frame(build_snapshot(game, tick, paused))
 
 
 # ---------------------------------------------------------------------------

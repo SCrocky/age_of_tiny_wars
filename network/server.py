@@ -21,7 +21,7 @@ from entities.building import Castle, Tower
 from entities.archer import Archer
 from entities.warrior import Warrior
 from systems.pathfinding import astar
-from network.serialization import serialize_snapshot, deserialize_command
+from network.serialization import build_snapshot, encode_frame, deserialize_command
 
 TICK_RATE      = 60       # game simulation Hz
 SNAPSHOT_RATE  = 10       # state broadcasts per second
@@ -130,8 +130,22 @@ class GameServer:
     # ------------------------------------------------------------------
 
     async def _broadcast_snapshot(self):
-        data = serialize_snapshot(self.game, self._tick, paused=self._paused)
-        await self._send_all(data)
+        snap = build_snapshot(self.game, self._tick, paused=self._paused)
+        encoded = None  # lazily encode only if TCP clients need it
+        dead = []
+        for team, writer in self._writers.items():
+            try:
+                if hasattr(writer, "write_snapshot"):
+                    writer.write_snapshot(snap)
+                else:
+                    if encoded is None:
+                        encoded = encode_frame(snap)
+                    writer.write(encoded)
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                dead.append(team)
+        for team in dead:
+            self._handle_disconnect(team)
         if self._last_save_file:
             await self._broadcast({"type": "SAVE_OK", "file": self._last_save_file})
             self._last_save_file = None

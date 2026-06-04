@@ -4,9 +4,9 @@ In-process AI player.
 Replaces a TCP (reader, writer, team) triple with an in-memory pair so the
 AI can slot directly into GameServer.run() without a network connection.
 
-Wire protocol is identical to the real TCP path:
-  - Server writes length-prefixed msgpack frames to the writer (_SnapshotSink).
-  - The AI feeds length-prefixed msgpack frames into the reader (StreamReader).
+Server calls write_snapshot(dict) on the writer (_SnapshotSink) directly,
+bypassing msgpack encode/decode for in-process snapshots.
+The AI feeds length-prefixed msgpack frames into the reader (StreamReader) for commands.
 """
 
 import asyncio
@@ -43,6 +43,11 @@ class _SnapshotSink:
                     self.queue.put_nowait(msg)
             except Exception:
                 pass
+
+    def write_snapshot(self, msg: dict) -> None:
+        """Bypass msgpack for in-process snapshots — put the dict directly."""
+        if msg.get("type") == "GAME_STATE":
+            self.queue.put_nowait(msg)
 
     async def drain(self) -> None:
         pass
