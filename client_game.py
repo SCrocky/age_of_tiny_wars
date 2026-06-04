@@ -659,12 +659,12 @@ class ClientGame:
             for arrow in self._arrows:
                 if self.fog.is_visible(arrow.x, arrow.y, TILE_SIZE):
                     entity_renderer.render_arrow(arrow, renderer, cam)
+
+            friendly = [e for e in self._units + self._pawns + self._buildings
+                        if e.team == self.player_team]
+            self._map_renderer.render_fog(self.fog, self.map, renderer, cam, friendly)
         finally:
             self._restore_lerp()
-
-        friendly = [e for e in self._units + self._pawns + self._buildings
-                    if e.team == self.player_team]
-        self._map_renderer.render_fog(self.fog, self.map, renderer, cam, friendly)
 
         # Switch to window-pixel space for HUD and overlays.
         self.viewport.apply_window(renderer)
