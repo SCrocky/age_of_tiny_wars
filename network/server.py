@@ -16,7 +16,7 @@ import struct
 import time
 
 from game import Game
-from map import TILE_SIZE
+from map import TILE_SIZE, NAV_TILE
 from entities.building import Castle, Tower
 from entities.archer import Archer
 from entities.warrior import Warrior
@@ -100,7 +100,7 @@ class GameServer:
                 self._apply_command(cmd, player_team)
 
             if self._paused:
-                next_tick_time = time.monotonic()  # don't pile up ticks while paused
+                next_tick_time = time.monotonic() + dt  # sleep one tick, don't spin
                 self._tick += 1
                 if self._tick % _TICKS_PER_SNAP == 0:
                     await self._broadcast_snapshot()
@@ -205,13 +205,14 @@ class GameServer:
             if archer is None or not archer.alive or not tower.alive:
                 done.append(archer_id)
                 continue
-            tx, ty = tower.closest_point(archer.x, archer.y)
-            if math.hypot(tx - archer.x, ty - archer.y) <= TILE_SIZE:
+            archer_r = archer._col_radius or 0.0
+            tx, ty = tower.sprite_closest_point(archer.x, archer.y)
+            if math.hypot(tx - archer.x, ty - archer.y) - archer_r <= TILE_SIZE * 0.5:
                 if tower.garrison(archer):
                     self.game.units.remove(archer)
                 done.append(archer_id)
             elif archer.attack_target is None:
-                archer._navigate_to(tx, ty, self.game.map, TILE_SIZE)
+                archer._navigate_to(tx, ty, self.game.nav_grid, archer_r + TILE_SIZE * 0.5)
         for archer_id in done:
             del self._pending_garrisons[archer_id]
 
@@ -224,15 +225,19 @@ class GameServer:
 
         if kind == "CMD_MOVE":
             ids = set(cmd.get("unit_ids", []))
-            goal_col = cmd.get("goal_col", 0)
-            goal_row = cmd.get("goal_row", 0)
+            _nav_scale = TILE_SIZE // NAV_TILE  # 4 nav cells per tile
+            goal_nav_col = cmd.get("goal_col", 0) * _nav_scale
+            goal_nav_row = cmd.get("goal_row", 0) * _nav_scale
             all_movable = self.game.units + self.game.pawns
             targets = [u for u in all_movable if u.entity_id in ids and u.team == player_team]
             offsets = self.game._formation_offsets(len(targets))
             for unit, (dc, dr) in zip(targets, offsets):
-                dest = self.game.map.nearest_walkable(goal_col + dc, goal_row + dr)
-                start = (int(unit.x // TILE_SIZE), int(unit.y // TILE_SIZE))
-                path = astar(self.game.map, start, dest)
+                dest = self.game.nav_grid.nearest_walkable(
+                    goal_nav_col + dc * _nav_scale,
+                    goal_nav_row + dr * _nav_scale,
+                )
+                start = (int(unit.x // NAV_TILE), int(unit.y // NAV_TILE))
+                path = astar(self.game.nav_grid, start, dest)
                 unit.set_path(path)
                 self._pending_garrisons.pop(unit.entity_id, None)
 
@@ -287,13 +292,14 @@ class GameServer:
                 return
             for u in list(self.game.units):
                 if u.entity_id in archer_ids and u.team == player_team and isinstance(u, Archer):
-                    tx, ty = tower.closest_point(u.x, u.y)
-                    if math.hypot(tx - u.x, ty - u.y) <= TILE_SIZE:
+                    archer_r = u._col_radius or 0.0
+                    tx, ty = tower.sprite_closest_point(u.x, u.y)
+                    if math.hypot(tx - u.x, ty - u.y) - archer_r <= TILE_SIZE * 0.5:
                         if tower.garrison(u):
                             self.game.units.remove(u)
                             self._pending_garrisons.pop(u.entity_id, None)
                     else:
-                        u._navigate_to(tx, ty, self.game.map, TILE_SIZE)
+                        u._navigate_to(tx, ty, self.game.nav_grid, archer_r + TILE_SIZE * 0.5)
                         self._pending_garrisons[u.entity_id] = tower
                     break  # one archer per tower
 
@@ -351,6 +357,7 @@ class GameServer:
 
     def _do_build(self, building_type: str, wx: float, wy: float, pawn_ids: set, team: str):
         from entities.blueprint import Blueprint, BUILDABLE
+        from systems import collision
         cls_costs = BUILDABLE.get(building_type)
         if cls_costs is None:
             return
@@ -358,9 +365,17 @@ class GameServer:
         eco = self.game.economy[team]
         if not all(eco.get(k, 0) >= v for k, v in costs.items()):
             return
+        building = cls(wx, wy, team=team)
+        collision.register(building)
+        if collision.any_overlap(building, self.game.collision_grid):
+            return
+        # Blueprints aren't in the collision grid (they're walkable so pawns
+        # can reach them), so they need a separate placement-time check to
+        # stop two builds piling on the same spot.
+        if any(collision.overlaps(building, bp) for bp in self.game.blueprints):
+            return
         for k, v in costs.items():
             eco[k] -= v
-        building = cls(wx, wy, team=team)
         self.game.map.clear_area(wx, wy, tile_radius=4)
         bp = self.game._assign_id(Blueprint(building))
         self.game.blueprints.append(bp)

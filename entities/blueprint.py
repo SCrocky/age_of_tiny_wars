@@ -23,8 +23,6 @@ class Blueprint:
         self.selected    = False
         self.alive       = True
         self.progress    = 0.0
-        self.COLLISION_W = building.COLLISION_W
-        self.COLLISION_H = building.COLLISION_H
 
     @property
     def hp(self) -> int:
@@ -40,6 +38,9 @@ class Blueprint:
 
     def closest_point(self, x: float, y: float) -> tuple[float, float]:
         return self._building.closest_point(x, y)
+
+    def sprite_closest_point(self, x: float, y: float) -> tuple[float, float]:
+        return self._building.sprite_closest_point(x, y)
 
     def hit_test(self, sx: float, sy: float, camera) -> bool:
         return self._building.hit_test(sx, sy, camera)

@@ -28,17 +28,15 @@ def _astar_worker(
     cols: int,
     rows: int,
     tiles_flat: bytes,
-    blocked: list,
     start: tuple,
     goal: tuple,
 ) -> list:
     """A* for worker processes — pure Python, no external dependencies."""
-    blocked_set = frozenset(map(tuple, blocked))
 
     def is_walkable(c: int, r: int) -> bool:
         if c < 0 or c >= cols or r < 0 or r >= rows:
             return False
-        return tiles_flat[r * cols + c] == 1 and (c, r) not in blocked_set
+        return tiles_flat[r * cols + c] == 0  # NavGrid: 0=walkable, 1=blocked
 
     if not is_walkable(*goal) or start == goal:
         return []
@@ -84,19 +82,13 @@ def _astar_worker(
     return []
 
 
-def submit_astar(tile_map, start: tuple, goal: tuple) -> Future:
+def submit_astar(nav_grid, start: tuple, goal: tuple) -> Future:
     """Submit an A* request to the worker pool; returns a Future[list]."""
-    tiles_flat = bytes(
-        tile_map.tiles[r][c]
-        for r in range(tile_map.rows)
-        for c in range(tile_map.cols)
-    )
     return _get_pool().submit(
         _astar_worker,
-        tile_map.cols,
-        tile_map.rows,
-        tiles_flat,
-        list(tile_map.blocked),
+        nav_grid.cols,
+        nav_grid.rows,
+        nav_grid.flat_bytes,
         start,
         goal,
     )
@@ -106,22 +98,22 @@ def submit_astar(tile_map, start: tuple, goal: tuple) -> Future:
 # Synchronous A* (used by Pawn and any callers needing an immediate result)
 # ---------------------------------------------------------------------------
 
-def astar(tile_map, start: tuple[int, int], goal: tuple[int, int]) -> list[tuple[int, int]]:
+def astar(nav_grid, start: tuple[int, int], goal: tuple[int, int]) -> list[tuple[int, int]]:
     """
-    A* on the tile grid.
+    A* on the nav grid (NavGrid or any object with is_walkable(col, row)).
 
     Parameters
     ----------
-    tile_map : TileMap
-    start    : (col, row) of the starting tile
-    goal     : (col, row) of the destination tile
+    nav_grid : NavGrid  — 16-px resolution grid; 0=walkable, 1=blocked
+    start    : (col, row) in nav-grid coordinates
+    goal     : (col, row) in nav-grid coordinates
 
     Returns
     -------
-    List of (col, row) tiles from *after* start up to and including goal.
+    List of (col, row) nav cells from *after* start up to and including goal.
     Empty list if no path exists.
     """
-    if not tile_map.is_walkable(*goal):
+    if not nav_grid.is_walkable(*goal):
         return []
     if start == goal:
         return []
@@ -154,13 +146,13 @@ def astar(tile_map, start: tuple[int, int], goal: tuple[int, int]) -> list[tuple
 
         for dc, dr in CARDINAL + DIAGONAL:
             nb = (current[0] + dc, current[1] + dr)
-            if not tile_map.is_walkable(*nb):
+            if not nav_grid.is_walkable(*nb):
                 continue
             step_cost = 1.0 if (dc == 0 or dr == 0) else 1.414
             # Block diagonal moves that cut through unwalkable corners
             if dc != 0 and dr != 0:
-                if not tile_map.is_walkable(current[0] + dc, current[1]) or \
-                   not tile_map.is_walkable(current[0], current[1] + dr):
+                if not nav_grid.is_walkable(current[0] + dc, current[1]) or \
+                   not nav_grid.is_walkable(current[0], current[1] + dr):
                     continue
             tentative_g = g[current] + step_cost
             if tentative_g < g.get(nb, float("inf")):

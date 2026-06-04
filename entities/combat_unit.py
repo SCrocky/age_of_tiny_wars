@@ -35,7 +35,7 @@ class CombatUnit(Unit):
     # Main update loop
     # ------------------------------------------------------------------
 
-    def update(self, dt: float, tile_map=None, enemy_pool=None) -> list:
+    def update(self, dt: float, nav_grid=None, enemy_pool=None) -> list:
         self._time += dt
 
         if enemy_pool is not None:
@@ -66,7 +66,7 @@ class CombatUnit(Unit):
             else:
                 self._state        = "run"
                 self._action_timer = 0.0
-                self._chase(dt, tile_map)
+                self._chase(dt, nav_grid)
         elif self._approach_target is not None:
             self._state = "run"
             self._step_approach(dt)

@@ -48,10 +48,23 @@ class ResourceNode:
     def _frame_count(self) -> int:
         return 1
 
+    def sprite_closest_point(self, x: float, y: float) -> tuple[float, float]:
+        half = self.DISPLAY_SIZE / 2
+        return (
+            max(self.x - half, min(x, self.x + half)),
+            max(self.y - half, min(y, self.y + half)),
+        )
+
     def hit_test(self, sx: float, sy: float, camera) -> bool:
         ux, uy = camera.world_to_screen(self.x, self.y)
         r = HIT_RADIUS * camera.zoom
         return (sx - ux) ** 2 + (sy - uy) ** 2 <= r * r
+
+    @property
+    def nav_footprint(self) -> tuple[float, float, float, float]:
+        """World-pixel (left, top, width, height) used to block the nav grid."""
+        half = self.DISPLAY_SIZE / 2
+        return (self.x - half, self.y - half, self.DISPLAY_SIZE, self.DISPLAY_SIZE)
 
 
 # ---------------------------------------------------------------------------
@@ -71,12 +84,10 @@ class GoldNode(ResourceNode):
 
 
 class WoodNode(ResourceNode):
-    resource_type    = "wood"
-    max_amount       = 250
-    DISPLAY_SIZE     = 112
-    COLLISION_RADIUS   = 18   # trunk collision radius in world px
-    COLLISION_Y_OFFSET = 28   # shift collision center down toward the trunk
-    ANIM_FPS         = 5
+    resource_type = "wood"
+    max_amount    = 250
+    DISPLAY_SIZE  = 112
+    ANIM_FPS      = 5
 
     def __init__(self, x: float, y: float, variant: int = 0):
         super().__init__(x, y)

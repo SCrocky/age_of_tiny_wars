@@ -52,9 +52,9 @@ class Warrior(CombatUnit):
     # Update / attack
     # ------------------------------------------------------------------
 
-    def update(self, dt: float, tile_map=None, enemy_pool=None) -> list:
+    def update(self, dt: float, nav_grid=None, enemy_pool=None) -> list:
         self._guard_timer = max(0.0, self._guard_timer - dt)
-        return super().update(dt, tile_map, enemy_pool)
+        return super().update(dt, nav_grid, enemy_pool)
 
     def _tick_attack(self, dt: float):
         if self._time - self._last_shot_time < ATTACK_COOLDOWN:

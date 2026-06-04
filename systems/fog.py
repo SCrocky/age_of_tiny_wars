@@ -11,6 +11,7 @@ class FogOfWar:
         self.cols = cols
         self._state = bytearray(rows * cols)  # flat array, row-major
         self._visible: set[int] = set()       # indices of currently VISIBLE tiles
+        self.version: int = 0                 # incremented each update so renderers can cache
 
     def update(self, friendly_entities, tile_size: float):
         """Recompute visibility from all living friendly entities."""
@@ -43,6 +44,7 @@ class FogOfWar:
                         idx = row * cols + col
                         state[idx] = VISIBLE
                         visible.add(idx)
+        self.version += 1
 
     def tile_state(self, col: int, row: int) -> int:
         if col < 0 or col >= self.cols or row < 0 or row >= self.rows:

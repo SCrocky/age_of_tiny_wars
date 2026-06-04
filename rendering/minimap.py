@@ -6,8 +6,11 @@ coloured dots for visible entities, draws the camera's viewport rect,
 and exposes hit_test() for click/drag-to-pan.
 """
 from __future__ import annotations
+import numpy as np
 import pygame
-from pygame._sdl2.video import Renderer
+import pygame.surfarray as surfarray
+from pygame._sdl2.video import Renderer, Texture
+from systems.fog import UNEXPLORED
 
 _BUILDING_TYPES = ("Castle", "Archery", "Barracks", "House", "Tower", "Monastery")
 _RESOURCE_COLORS = {
@@ -31,7 +34,11 @@ class Minimap:
         self._h        = self.MAX_SIZE
         self._x        = 0
         self._y        = 0
-        self._laid_out = False
+        self._laid_out    = False
+        self._fog_tex     = None   # cached Texture of the fog overlay
+        self._fog_version = -1     # FogOfWar.version when _fog_tex was built
+        self._fog_dims    = None   # (cols, rows) when index arrays were built
+        self._fog_idx     = None   # (col_idx, row_idx) numpy arrays, cached
 
     def _layout(self, map_pw: int, map_ph: int) -> None:
         if self._laid_out:
@@ -44,10 +51,49 @@ class Minimap:
         self._y        = self.window_h - self._h - self.PAD
         self._laid_out = True
 
+    def _build_fog_tex(self, renderer: Renderer, fog, tile_size: int) -> Texture:
+        """Rebuild the fog overlay texture from current FogOfWar state."""
+        w, h = self._w, self._h
+        ts   = tile_size * self._scale
+
+        if self._fog_dims != (fog.cols, fog.rows):
+            self._fog_dims = (fog.cols, fog.rows)
+            self._fog_idx  = (
+                np.minimum((np.arange(w) / ts).astype(np.int32), fog.cols - 1),
+                np.minimum((np.arange(h) / ts).astype(np.int32), fog.rows - 1),
+            )
+        col_idx, row_idx = self._fog_idx
+
+        # Sample in (w, h) layout directly — no transpose or ascontiguousarray needed.
+        # result[x, y] = fog_2d[row_idx[y], col_idx[x]]
+        fog_2d    = np.frombuffer(fog._state, dtype=np.uint8).reshape(fog.rows, fog.cols)
+        state_map = fog_2d[row_idx[np.newaxis, :], col_idx[:, np.newaxis]]  # (w, h)
+
+        # LUT: UNEXPLORED→black opaque, EXPLORED→dark green semi-transparent, VISIBLE→clear
+        lut  = np.array([(0, 0, 0, 255), (20, 35, 20, 170), (0, 0, 0, 0)], dtype=np.uint8)
+        rgba = lut[np.clip(state_map, 0, 2)]   # (w, h, 4) — already in surfarray layout
+
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        pix = surfarray.pixels3d(surf)
+        pix[:] = rgba[:, :, :3]
+        del pix
+        alp = surfarray.pixels_alpha(surf)
+        alp[:] = rgba[:, :, 3]
+        del alp
+
+        # Reuse a single streaming texture to avoid GPU reallocation every rebuild.
+        if (self._fog_tex is None
+                or self._fog_tex.width != w or self._fog_tex.height != h):
+            self._fog_tex = Texture(renderer, (w, h), streaming=True)
+            self._fog_tex.blend_mode = pygame.BLENDMODE_BLEND
+        self._fog_tex.update(surf)
+        return self._fog_tex
+
     # ------------------------------------------------------------------
 
     def draw(self, renderer: Renderer, tile_tex, map_pw: int, map_ph: int,
-             camera, entities, player_team: str, fog_visible) -> None:
+             camera, entities, player_team: str, fog_visible,
+             fog=None, tile_size: int = 64) -> None:
         self._layout(map_pw, map_ph)
         x, y, w, h = self._x, self._y, self._w, self._h
 
@@ -56,6 +102,13 @@ class Minimap:
 
         if tile_tex is not None:
             tile_tex.draw(dstrect=(x, y, w, h))
+
+        if fog is not None:
+            if fog.version != self._fog_version:
+                self._fog_tex     = self._build_fog_tex(renderer, fog, tile_size)
+                self._fog_version = fog.version
+            if self._fog_tex is not None:
+                self._fog_tex.draw(dstrect=(x, y, w, h))
 
         for e in entities:
             if not getattr(e, "alive", True):

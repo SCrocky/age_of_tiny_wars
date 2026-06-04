@@ -1,12 +1,12 @@
 import enum
 import math
 from entities.unit import Unit
-from map import TILE_SIZE
+from map import NAV_TILE
 
 ANIM_FPS        = 8
 GATHER_RATE     = 15    # resource units per second
 CARRY_MAX       = 30
-INTERACT_RADIUS        = 60.0
+INTERACT_RADIUS        = 6.0
 NEARBY_RESOURCE_RADIUS  = 192.0  # 3 tiles — auto-switch range on depletion
 NEARBY_BLUEPRINT_RADIUS = 192.0  # 3 tiles — auto-spread to adjacent build sites
 
@@ -44,9 +44,9 @@ class Task(enum.Enum):
     BUILD       = "build"
 
 
-def _nearest_walkable_south(col: int, row: int, tile_map) -> tuple[int, int]:
-    """Nearest walkable tile, preferring south so pawns approach from the gate."""
-    for r in range(1, 8):
+def _nearest_walkable_south(col: int, row: int, nav_grid) -> tuple[int, int]:
+    """Nearest walkable nav cell, preferring south so pawns approach from the gate."""
+    for r in range(1, 32):
         ring = [
             (dc, dr)
             for dc in range(-r, r + 1)
@@ -55,7 +55,7 @@ def _nearest_walkable_south(col: int, row: int, tile_map) -> tuple[int, int]:
         ]
         ring.sort(key=lambda p: (p[0] != 0 and p[1] != 0, -p[1]))
         for dc, dr in ring:
-            if tile_map.is_walkable(col + dc, row + dr):
+            if nav_grid.is_walkable(col + dc, row + dr):
                 return col + dc, row + dr
     return col, row
 
@@ -76,7 +76,7 @@ class Pawn(Unit):
 
     DISPLAY_SIZE    = 80
     MOVE_SPEED      = 80.0
-    DEPOSIT_RADIUS  = 60.0
+    DEPOSIT_RADIUS  = 12.0
     SELECT_RADIUS   = 18
 
     def __init__(self, x: float, y: float, team: str = "blue"):
@@ -98,6 +98,7 @@ class Pawn(Unit):
         # Build task
         self._blueprint      = None
         self._blueprint_pool: list = []
+
 
     # ------------------------------------------------------------------
     # Commands
@@ -125,7 +126,7 @@ class Pawn(Unit):
     # Update  →  returns {'gold': n, 'wood': n, 'meat': n} deposit or {}
     # ------------------------------------------------------------------
 
-    def update(self, dt: float, tile_map=None) -> dict:
+    def update(self, dt: float, nav_grid=None) -> dict:
         _dispatch = {
             Task.TO_RESOURCE: self._tick_to_resource,
             Task.GATHER:      self._tick_gather,
@@ -135,7 +136,7 @@ class Pawn(Unit):
         }
         handler = _dispatch.get(self._task)
         if handler:
-            deposit = handler(dt, tile_map)
+            deposit = handler(dt, nav_grid)
         else:
             deposit = {}
 
@@ -151,7 +152,7 @@ class Pawn(Unit):
     # Per-state tick methods
     # ------------------------------------------------------------------
 
-    def _tick_to_resource(self, dt: float, tile_map) -> dict:
+    def _tick_to_resource(self, dt: float, nav_grid) -> dict:
         if not self._resource_node or self._resource_node.depleted:
             nearby = self.search_nearby_for(
                 self._resource_pool,
@@ -164,15 +165,15 @@ class Pawn(Unit):
             else:
                 self._task = Task.IDLE
         else:
-            self._navigate_to(self._resource_node.x, self._resource_node.y,
-                              tile_map, arrive_radius=48.0)
-            if math.hypot(self._resource_node.x - self.x,
-                          self._resource_node.y - self.y) <= 48.0:
+            pawn_r = self._col_radius
+            tx, ty = self._resource_node.sprite_closest_point(self.x, self.y)
+            self._navigate_to(tx, ty, nav_grid, arrive_radius=pawn_r + INTERACT_RADIUS)
+            if math.hypot(tx - self.x, ty - self.y) - pawn_r <= INTERACT_RADIUS:
                 self._task         = Task.GATHER
                 self._gather_timer = 0.0
         return {}
 
-    def _tick_gather(self, dt: float, tile_map) -> dict:
+    def _tick_gather(self, dt: float, nav_grid) -> dict:
         self.path = []
         if not self._resource_node or self._resource_node.depleted:
             if self._carried > 0:
@@ -199,14 +200,15 @@ class Pawn(Unit):
                 self._task = Task.TO_DEPOT
         return {}
 
-    def _tick_to_depot(self, dt: float, tile_map) -> dict:
+    def _tick_to_depot(self, dt: float, nav_grid) -> dict:
         depot = self._nearest_depot()
         if not depot:
             self._task = Task.IDLE
             return {}
-        tx, ty = depot.closest_point(self.x, self.y)
-        self._navigate_to(tx, ty, tile_map, self.DEPOSIT_RADIUS)
-        if math.hypot(tx - self.x, ty - self.y) <= self.DEPOSIT_RADIUS:
+        pawn_r = self._col_radius
+        tx, ty = depot.sprite_closest_point(self.x, self.y)
+        self._navigate_to(tx, ty, nav_grid, pawn_r + self.DEPOSIT_RADIUS)
+        if math.hypot(tx - self.x, ty - self.y) - pawn_r <= self.DEPOSIT_RADIUS:
             carried = int(self._carried)
             deposit = {self._resource_type: carried} if carried > 0 else {}
             self._carried = 0.0
@@ -215,17 +217,18 @@ class Pawn(Unit):
             return deposit
         return {}
 
-    def _tick_to_build(self, dt: float, tile_map) -> dict:
+    def _tick_to_build(self, dt: float, nav_grid) -> dict:
         if not self._blueprint or not self._blueprint.alive:
             self._try_nearby_blueprint()
         else:
-            tx, ty = self._blueprint.closest_point(self.x, self.y)
-            self._navigate_to(tx, ty, tile_map, INTERACT_RADIUS)
-            if math.hypot(tx - self.x, ty - self.y) <= INTERACT_RADIUS:
+            pawn_r = self._col_radius
+            tx, ty = self._blueprint.sprite_closest_point(self.x, self.y)
+            self._navigate_to(tx, ty, nav_grid, pawn_r + INTERACT_RADIUS)
+            if math.hypot(tx - self.x, ty - self.y) - pawn_r <= INTERACT_RADIUS:
                 self._task = Task.BUILD
         return {}
 
-    def _tick_build(self, dt: float, tile_map) -> dict:
+    def _tick_build(self, dt: float, nav_grid) -> dict:
         self.path = []
         if not self._blueprint or not self._blueprint.alive:
             self._try_nearby_blueprint()
@@ -258,16 +261,16 @@ class Pawn(Unit):
             return None
         return min(depots, key=lambda d: math.hypot(d.x - self.x, d.y - self.y))
 
-    def _repath(self, tx: float, ty: float, tile_map):
+    def _repath(self, tx: float, ty: float, nav_grid):
         # Pawns prefer entering buildings from the south (gate side).
         from systems.pathfinding import astar
-        sc = int(self.x // TILE_SIZE)
-        sr = int(self.y // TILE_SIZE)
-        gc = int(tx // TILE_SIZE)
-        gr = int(ty // TILE_SIZE)
-        if not tile_map.is_walkable(gc, gr):
-            gc, gr = _nearest_walkable_south(gc, gr, tile_map)
-        self.path = astar(tile_map, (sc, sr), (gc, gr))
+        sc = int(self.x // NAV_TILE)
+        sr = int(self.y // NAV_TILE)
+        gc = int(tx // NAV_TILE)
+        gr = int(ty // NAV_TILE)
+        if not nav_grid.is_walkable(gc, gr):
+            gc, gr = _nearest_walkable_south(gc, gr, nav_grid)
+        self.path = astar(nav_grid, (sc, sr), (gc, gr))
 
     def _current_anim_key(self) -> str:
         if self._task is Task.TO_RESOURCE and self._resource_type:

@@ -25,7 +25,7 @@ class Monk(Unit):
 
     # attack_target is repurposed here as heal_target for movement/pathfinding reuse
 
-    def update(self, dt: float, tile_map=None, ally_pool=None) -> list:
+    def update(self, dt: float, nav_grid=None, ally_pool=None) -> list:
         self._time += dt
 
         if ally_pool is not None:
@@ -60,7 +60,7 @@ class Monk(Unit):
                     )
             else:
                 self._state = "run"
-                self._chase(dt, tile_map)
+                self._chase(dt, nav_grid)
         elif self.path:
             self._state = "run"
             self._move_along_path(dt)

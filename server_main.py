@@ -154,6 +154,9 @@ if __name__ == "__main__":
     seats = _parse_players_arg(args.players)
     teams = tuple(team for team, _ in seats)
 
+    import collision_masks
+    collision_masks.ensure_built()
+
     scene = args.scene
     if scene is None:
         print(f"[server] Generating {args.size} map for teams: {teams}…")

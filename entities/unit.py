@@ -1,7 +1,7 @@
 import math
 import random
 from entities.entity import Entity
-from map import TILE_SIZE
+from map import NAV_TILE
 
 
 class Unit(Entity):
@@ -56,8 +56,8 @@ class Unit(Entity):
         if not self.path:
             return
         col, row = self.path[0]
-        target_x = col * TILE_SIZE + TILE_SIZE / 2
-        target_y = row * TILE_SIZE + TILE_SIZE / 2
+        target_x = col * NAV_TILE + NAV_TILE / 2
+        target_y = row * NAV_TILE + NAV_TILE / 2
         if len(self.path) == 1:
             target_x += self._arrival_offset[0]
             target_y += self._arrival_offset[1]
@@ -78,13 +78,13 @@ class Unit(Entity):
         tx, ty = self.attack_target.closest_point(self.x, self.y)
         return math.hypot(tx - self.x, ty - self.y)
 
-    def _chase(self, dt: float, tile_map):
+    def _chase(self, dt: float, nav_grid):
         """Follow path toward attack_target; step directly if path is exhausted."""
-        if tile_map is not None:
+        if nav_grid is not None:
             self._chase_timer -= dt
             if self._chase_timer <= 0:
                 self._chase_timer = self.CHASE_INTERVAL
-                self._repath_to_target(tile_map)
+                self._repath_to_target(nav_grid)
 
         # Apply completed async path result
         if self._path_future is not None and self._path_future.done():
@@ -109,35 +109,35 @@ class Unit(Entity):
                 if abs(dx) > 1:
                     self._facing_right = dx > 0
 
-    def _repath_to_target(self, tile_map):
+    def _repath_to_target(self, nav_grid):
         from systems.pathfinding import submit_astar
-        sc = int(self.x // TILE_SIZE)
-        sr = int(self.y // TILE_SIZE)
+        sc = int(self.x // NAV_TILE)
+        sr = int(self.y // NAV_TILE)
         get_point = getattr(self.attack_target, 'sprite_closest_point', self.attack_target.closest_point)
         tx, ty = get_point(self.x, self.y)
-        gc = int(tx // TILE_SIZE)
-        gr = int(ty // TILE_SIZE)
-        gc, gr = tile_map.nearest_walkable(gc, gr)
-        self._path_future = submit_astar(tile_map, (sc, sr), (gc, gr))
+        gc = int(tx // NAV_TILE)
+        gr = int(ty // NAV_TILE)
+        gc, gr = nav_grid.nearest_walkable(gc, gr)
+        self._path_future = submit_astar(nav_grid, (sc, sr), (gc, gr))
 
-    def _navigate_to(self, tx: float, ty: float, tile_map, arrive_radius: float):
+    def _navigate_to(self, tx: float, ty: float, nav_grid, arrive_radius: float):
         """Plan an approach toward (tx, ty); the unit's update tick performs the movement."""
         self._approach_target = (tx, ty, arrive_radius)
-        if not self.path and tile_map:
-            sc = int(self.x // TILE_SIZE)
-            sr = int(self.y // TILE_SIZE)
-            if tile_map.is_walkable(sc, sr):
-                self._repath(tx, ty, tile_map)
+        if not self.path and nav_grid:
+            sc = int(self.x // NAV_TILE)
+            sr = int(self.y // NAV_TILE)
+            if nav_grid.is_walkable(sc, sr):
+                self._repath(tx, ty, nav_grid)
 
-    def _repath(self, tx: float, ty: float, tile_map):
+    def _repath(self, tx: float, ty: float, nav_grid):
         from systems.pathfinding import astar
-        sc = int(self.x // TILE_SIZE)
-        sr = int(self.y // TILE_SIZE)
-        gc = int(tx // TILE_SIZE)
-        gr = int(ty // TILE_SIZE)
-        if not tile_map.is_walkable(gc, gr):
-            gc, gr = tile_map.nearest_walkable(gc, gr)
-        self.path = astar(tile_map, (sc, sr), (gc, gr))
+        sc = int(self.x // NAV_TILE)
+        sr = int(self.y // NAV_TILE)
+        gc = int(tx // NAV_TILE)
+        gr = int(ty // NAV_TILE)
+        if not nav_grid.is_walkable(gc, gr):
+            gc, gr = nav_grid.nearest_walkable(gc, gr)
+        self.path = astar(nav_grid, (sc, sr), (gc, gr))
 
     def _step_approach(self, dt: float):
         """Move one tick toward the stored approach target; clears the target on use."""

@@ -80,6 +80,10 @@ class ClientGame:
         self.debug: bool = False
 
         self.fog = FogOfWar(self.map.rows, self.map.cols)
+        # Per-frame stamp used by _fog_visible to cache results on each entity.
+        # Bumped at the start of render(); a proxy's _fog_vis is only valid
+        # when its _fog_vis_frame matches.
+        self._fog_frame: int = 0
 
         self._control_groups: dict[int, list[int]] = {}
 
@@ -289,7 +293,8 @@ class ClientGame:
                 self._drag_start = event.pos
                 self._dragging   = False
             elif event.button == 3:
-                self._handle_right_click(event.pos)
+                if not self._handle_minimap_right_click(event.pos):
+                    self._handle_right_click(event.pos)
 
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1:
@@ -388,6 +393,28 @@ class ClientGame:
         wx, wy = hit
         self.camera.x = wx - self.w / 2 / self.camera.zoom
         self.camera.y = wy - self.h / 2 / self.camera.zoom
+        return True
+
+    def _handle_minimap_right_click(self, screen_pos) -> bool:
+        """If the click hits the minimap, issue a move command to selected units
+        at the corresponding world position and return True."""
+        hit = self.minimap.hit_test(screen_pos[0], screen_pos[1],
+                                    self.map.pixel_width, self.map.pixel_height)
+        if hit is None:
+            return False
+        wx, wy = hit
+        sel_units = [u for u in self._units if u.selected and u.team == self.player_team]
+        sel_pawns = [p for p in self._pawns if p.selected and p.team == self.player_team]
+        all_sel = sel_units + sel_pawns
+        if all_sel:
+            goal_col = max(0, min(int(wx // TILE_SIZE), self.map.cols - 1))
+            goal_row = max(0, min(int(wy // TILE_SIZE), self.map.rows - 1))
+            self._cmd_queue.put({
+                "type":     "CMD_MOVE",
+                "unit_ids": [u.entity_id for u in all_sel],
+                "goal_col": goal_col,
+                "goal_row": goal_row,
+            })
         return True
 
     def _handle_left_click(self, screen_pos):
@@ -545,15 +572,27 @@ class ClientGame:
     # Fog visibility
     # ------------------------------------------------------------------
 
+    _FOG_STATIC_TYPES = frozenset((
+        "Castle", "Archery", "Barracks", "House", "Tower", "Monastery",
+        "Blueprint", "GoldNode", "WoodNode",
+    ))
+
     def _fog_visible(self, obj) -> bool:
+        # Render() and minimap.draw() both ask about every visible entity in
+        # the same frame; cache the answer on the proxy under a frame stamp.
+        frame = self._fog_frame
+        if getattr(obj, "_fog_vis_frame", -1) == frame:
+            return obj._fog_vis
         team = getattr(obj, "team", None)
         if team == self.player_team:
-            return True
-        t = type(obj).__name__
-        if t in ("Castle", "Archery", "Barracks", "House", "Tower", "Monastery",
-                 "Blueprint", "GoldNode", "WoodNode"):
-            return self.fog.is_explored(obj.x, obj.y, TILE_SIZE)
-        return self.fog.is_visible(obj.x, obj.y, TILE_SIZE)
+            result = True
+        elif type(obj).__name__ in self._FOG_STATIC_TYPES:
+            result = self.fog.is_explored(obj.x, obj.y, TILE_SIZE)
+        else:
+            result = self.fog.is_visible(obj.x, obj.y, TILE_SIZE)
+        obj._fog_vis_frame = frame
+        obj._fog_vis       = result
+        return result
 
     # ------------------------------------------------------------------
     # Rendering
@@ -562,6 +601,9 @@ class ClientGame:
     def render(self):
         renderer = self.renderer
         cam      = self.camera
+
+        # New frame — invalidate every entity's cached fog visibility.
+        self._fog_frame += 1
 
         self.viewport.apply_window(renderer)
         renderer.draw_color = (10, 20, 40, 255)
@@ -649,7 +691,7 @@ class ClientGame:
             renderer, self._map_renderer._tile_tex,
             self.map.pixel_width, self.map.pixel_height,
             self.camera, minimap_entities, self.player_team,
-            self._fog_visible,
+            self._fog_visible, self.fog, TILE_SIZE,
         )
 
         col = BANNER_COLORS.get(self.player_team, (200, 200, 200))

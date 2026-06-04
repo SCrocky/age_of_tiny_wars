@@ -1,17 +1,18 @@
 import json
 import math
 import random
-from map import TileMap, TILE_SIZE
+from map import TileMap, NavGrid, NAV_TILE, TILE_SIZE
 from entities.archer import Archer
 from entities.lancer import Lancer
 from entities.warrior import Warrior
 from entities.monk import Monk
-from entities.pawn import Pawn
+from entities.pawn import Pawn, Task as PawnTask
 from entities.building import Building, Castle, Archery, Barracks, House, Tower, Monastery
 from entities.resource import GoldNode, WoodNode, MeatNode
 from entities.projectile import Arrow
 from entities.blueprint import Blueprint
 from entities.teams import teams_from_scene
+from systems import collision
 
 _BUILDING_CLS = {
     "Castle":    Castle,
@@ -42,7 +43,29 @@ class Game:
         self.economy: dict[str, dict[str, int]] = {}
 
         self._next_entity_id: int = 1
+        collision.init()
+        self.collision_grid = collision.StaticGrid()
         self._load_scene(scene_path)
+        # Populate the static grid once everything has been loaded.
+        # Blueprints are intentionally NOT added — under-construction sites are
+        # walkable so pawns (and everyone else) can reach the build target.
+        # Placement validation still excludes blueprint overlaps; see
+        # network/server._do_build.
+        for b in self.buildings: self.collision_grid.add(b)
+        for r in self.resources:
+            # MeatNode (sheep) is dynamic — it moves; everything else is static.
+            if not isinstance(r, MeatNode):
+                self.collision_grid.add(r)
+                r._in_grid = True
+
+        # Fine-grained 16-px navigation grid: water blocked at init,
+        # buildings and static resources registered as obstacles.
+        self.nav_grid = NavGrid(self.map)
+        for b in self.buildings:
+            self.nav_grid.block_rect(*b.nav_footprint)
+        for r in self.resources:
+            if not isinstance(r, MeatNode) and not r.depleted:
+                self.nav_grid.block_rect(*r.nav_footprint)
 
     # ------------------------------------------------------------------
     # Setup
@@ -51,6 +74,7 @@ class Game:
     def _assign_id(self, entity):
         entity.entity_id = self._next_entity_id
         self._next_entity_id += 1
+        collision.register(entity)
         return entity
 
     def save(self, path: str) -> None:
@@ -172,7 +196,6 @@ class Game:
                 kw["variant"] = b_data.get("variant", 1)
             building = self._assign_id(cls(b_data["x"], b_data["y"], team=b_data["team"], **kw))
             self.map.clear_area(building.x, building.y, tile_radius=4)
-            building.on_place(self.map)
             if "hp" in b_data:
                 building.hp = b_data["hp"]
             if isinstance(building, Tower) and "garrisoned_archer" in b_data:
@@ -243,7 +266,6 @@ class Game:
 
         # --- Second pass: resolve cross-references ---
 
-        from entities.pawn import Task as PawnTask
         _valid_task_values = {t.value for t in PawnTask}
 
         for p, p_data in _pawn_data_pairs:
@@ -302,45 +324,79 @@ class Game:
             if unit.team not in _ally_pool:
                 _ally_pool[unit.team] = [u for u in self.units + self.pawns if u.team == unit.team]
 
+        # Dynamic entities (move each tick) — small list, scanned linearly.
+        # Statics (buildings, blueprints, trees, gold) live in self.collision_grid.
+        grid = self.collision_grid
+        sheep = [r for r in self.resources if isinstance(r, MeatNode) and not r.depleted]
+        dynamics = [u for u in self.units if u.alive] \
+                 + [p for p in self.pawns if p.alive] \
+                 + sheep
+
         for unit in self.units:
+            old_x, old_y = unit.x, unit.y
             if isinstance(unit, Monk):
-                unit.update(dt, self.map, _ally_pool.get(unit.team, []))
+                unit.update(dt, self.nav_grid, _ally_pool.get(unit.team, []))
             else:
-                new_arrows = unit.update(dt, self.map, _enemy_pool.get(unit.team, []))
+                new_arrows = unit.update(dt, self.nav_grid, _enemy_pool.get(unit.team, []))
                 for arrow in new_arrows:
                     self._assign_id(arrow)
                 self.arrows.extend(new_arrows)
+            if unit.x != old_x or unit.y != old_y:
+                collision.resolve_move(unit, old_x, old_y, grid, dynamics)
 
         for building in self.buildings:
             if isinstance(building, Tower) and building.garrisoned_archer is not None:
                 enemies = [e for e in self.units + self.pawns + self.buildings
                            if e.team != building.team and getattr(e, "alive", True)]
-                new_arrows = building.update_garrison(dt, enemies, self.map)
+                new_arrows = building.update_garrison(dt, enemies, self.nav_grid)
                 for arrow in new_arrows:
                     self._assign_id(arrow)
                 self.arrows.extend(new_arrows)
 
         for pawn in self.pawns:
-            deposit = pawn.update(dt, self.map)
+            old_x, old_y = pawn.x, pawn.y
+            deposit = pawn.update(dt, self.nav_grid)
             for resource_type, amount in deposit.items():
                 self.economy[pawn.team][resource_type] += amount
+            if pawn.x != old_x or pawn.y != old_y:
+                skip_wood = pawn._task is PawnTask.GATHER
+                collision.resolve_move(pawn, old_x, old_y, grid, dynamics, skip_wood)
+
+        # Prune depleted static resources from the collision grid so the hot
+        # loop never has to filter them. Pawns may have just depleted a node
+        # via their _tick_gather call above.
+        for res in self.resources:
+            if getattr(res, "_in_grid", False) and res.depleted:
+                grid.remove(res)
+                res._in_grid = False
+                self.nav_grid.unblock_rect(*res.nav_footprint)
 
         for arrow in self.arrows:
             arrow.update(dt)
 
         for res in self.resources:
-            res.update(dt)
+            if isinstance(res, MeatNode):
+                if res.depleted:
+                    continue
+                old_x, old_y = res.x, res.y
+                res.update(dt)
+                if res.x != old_x or res.y != old_y:
+                    collision.resolve_move(res, old_x, old_y, grid, dynamics)
+            else:
+                res.update(dt)
 
-        self._apply_separation(dt)
-        self._apply_building_collision()
-        self._apply_tree_collision()
+        # Resolve residual unit-vs-unit overlaps after all positions are settled.
+        collision.separate_units(dynamics)
 
         next_buildings  = []
         next_blueprints = []
         for bp in self.blueprints:
             if bp.alive and bp.progress >= bp.max_hp:
                 building = self._assign_id(bp.complete())
-                building.on_place(self.map)
+                # Blueprint was never in the grid; only register the new
+                # building so it now physically blocks movement.
+                grid.add(building)
+                self.nav_grid.block_rect(*building.nav_footprint)
                 next_buildings.append(building)
             elif bp.alive:
                 next_blueprints.append(bp)
@@ -348,7 +404,11 @@ class Game:
             if b.alive:
                 next_buildings.append(b)
             else:
-                b.on_destroy(self.map)
+                grid.remove(b)
+                self.nav_grid.unblock_rect(*b.nav_footprint)
+                if isinstance(b, Tower) and b.garrisoned_archer is not None:
+                    b.garrisoned_archer.alive = False
+                    b.garrisoned_archer = None
         self.buildings  = next_buildings
         self.blueprints = next_blueprints
 
@@ -356,90 +416,6 @@ class Game:
         self.pawns  = [p for p in self.pawns  if p.alive]
         self.arrows = [a for a in self.arrows if a.alive]
         self._recalc_pop()
-
-    def _apply_building_collision(self):
-        for unit in self.units + self.pawns:
-            r = unit.DISPLAY_SIZE / 4
-            for building in self.buildings + self.blueprints:
-                hw = building.COLLISION_W / 2 + r
-                hh = building.COLLISION_H / 2 + r
-                dx = unit.x - building.x
-                dy = unit.y - building.y
-                ox = hw - abs(dx)
-                oy = hh - abs(dy)
-                if ox > 0 and oy > 0:
-                    if ox <= oy:
-                        unit.x += ox * (1 if dx >= 0 else -1)
-                    else:
-                        unit.y += oy * (1 if dy >= 0 else -1)
-
-    def _apply_tree_collision(self):
-        from entities.pawn import Task as PawnTask
-        for unit in self.units + self.pawns:
-            if getattr(unit, "_task", None) is PawnTask.GATHER:
-                continue
-            unit_r = unit.DISPLAY_SIZE / 4
-            for res in self.resources:
-                if not isinstance(res, WoodNode) or res.depleted:
-                    continue
-                combined_r = unit_r + WoodNode.COLLISION_RADIUS
-                dx = unit.x - res.x
-                dy = unit.y - (res.y + WoodNode.COLLISION_Y_OFFSET)
-                dist_sq = dx * dx + dy * dy
-                if 0 < dist_sq < combined_r * combined_r:
-                    dist = math.sqrt(dist_sq)
-                    overlap = combined_r - dist
-                    unit.x += dx / dist * overlap
-                    unit.y += dy / dist * overlap
-
-    def _apply_separation(self, dt: float):
-        RADIUS        = 52.0
-        REPEL_FORCE   = 240.0
-        ATTRACT_FORCE = 80.0
-        all_units = self.units + self.pawns
-        for i, a in enumerate(all_units):
-            fx = fy = 0.0
-            for j, b in enumerate(all_units):
-                if i == j:
-                    continue
-                dx = a.x - b.x
-                dy = a.y - b.y
-                dist = math.hypot(dx, dy)
-                if 0 < dist < RADIUS:
-                    # Quadratic falloff: weak at the edge, strong near contact.
-                    s = (RADIUS - dist) / RADIUS
-                    s *= s
-                    fx += dx / dist * s
-                    fy += dy / dist * s
-            fx *= REPEL_FORCE
-            fy *= REPEL_FORCE
-
-            target = self._unit_attract_point(a)
-            if target is not None:
-                tx, ty = target
-                tdx = tx - a.x
-                tdy = ty - a.y
-                tdist = math.hypot(tdx, tdy)
-                if tdist > 0:
-                    fx += tdx / tdist * ATTRACT_FORCE
-                    fy += tdy / tdist * ATTRACT_FORCE
-
-            new_x = a.x + fx * dt
-            new_y = a.y + fy * dt
-            if self.map.is_walkable(int(new_x // TILE_SIZE), int(a.y // TILE_SIZE)):
-                a.x = new_x
-            if self.map.is_walkable(int(a.x // TILE_SIZE), int(new_y // TILE_SIZE)):
-                a.y = new_y
-
-    @staticmethod
-    def _unit_attract_point(unit):
-        if unit.path:
-            col, row = unit.path[0]
-            return (col * TILE_SIZE + TILE_SIZE / 2, row * TILE_SIZE + TILE_SIZE / 2)
-        target = getattr(unit, "attack_target", None)
-        if target is not None and getattr(target, "alive", True):
-            return target.closest_point(unit.x, unit.y)
-        return None
 
     # ------------------------------------------------------------------
     # Server-facing helpers

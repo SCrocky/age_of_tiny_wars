@@ -34,12 +34,12 @@ _UNIT_SPECS = {
 _PAWN_SPEC = (Pawn.DISPLAY_SIZE, Pawn.SELECT_RADIUS)
 
 _BUILDING_SPECS = {
-    "Castle":    (Castle.DISPLAY_W,    Castle.DISPLAY_H,    Castle.COLLISION_W,    Castle.COLLISION_H,    Castle.is_depot,    Castle.pop_bonus,    Castle.HEALTH_BAR_WIDTH),
-    "Archery":   (Archery.DISPLAY_W,   Archery.DISPLAY_H,   Archery.COLLISION_W,   Archery.COLLISION_H,   Archery.is_depot,   Archery.pop_bonus,   Archery.HEALTH_BAR_WIDTH),
-    "Barracks":  (Barracks.DISPLAY_W,  Barracks.DISPLAY_H,  Barracks.COLLISION_W,  Barracks.COLLISION_H,  Barracks.is_depot,  Barracks.pop_bonus,  Barracks.HEALTH_BAR_WIDTH),
-    "House":     (House.DISPLAY_W,     House.DISPLAY_H,     House.COLLISION_W,     House.COLLISION_H,     House.is_depot,     House.pop_bonus,     House.HEALTH_BAR_WIDTH),
-    "Tower":     (Tower.DISPLAY_W,     Tower.DISPLAY_H,     Tower.COLLISION_W,     Tower.COLLISION_H,     Tower.is_depot,     Tower.pop_bonus,     Tower.HEALTH_BAR_WIDTH),
-    "Monastery": (Monastery.DISPLAY_W, Monastery.DISPLAY_H, Monastery.COLLISION_W, Monastery.COLLISION_H, Monastery.is_depot, Monastery.pop_bonus, Monastery.HEALTH_BAR_WIDTH),
+    "Castle":    (Castle.DISPLAY_W,    Castle.DISPLAY_H,    Castle.is_depot,    Castle.pop_bonus,    Castle.HEALTH_BAR_WIDTH),
+    "Archery":   (Archery.DISPLAY_W,   Archery.DISPLAY_H,   Archery.is_depot,   Archery.pop_bonus,   Archery.HEALTH_BAR_WIDTH),
+    "Barracks":  (Barracks.DISPLAY_W,  Barracks.DISPLAY_H,  Barracks.is_depot,  Barracks.pop_bonus,  Barracks.HEALTH_BAR_WIDTH),
+    "House":     (House.DISPLAY_W,     House.DISPLAY_H,     House.is_depot,     House.pop_bonus,     House.HEALTH_BAR_WIDTH),
+    "Tower":     (Tower.DISPLAY_W,     Tower.DISPLAY_H,     Tower.is_depot,     Tower.pop_bonus,     Tower.HEALTH_BAR_WIDTH),
+    "Monastery": (Monastery.DISPLAY_W, Monastery.DISPLAY_H, Monastery.is_depot, Monastery.pop_bonus, Monastery.HEALTH_BAR_WIDTH),
 }
 
 _RESOURCE_DISPLAY = {
@@ -60,8 +60,6 @@ class EntityProxy:
     SELECT_RADIUS   = 20
     DISPLAY_W       = 64
     DISPLAY_H       = 64
-    COLLISION_W     = 64
-    COLLISION_H     = 64
     HEALTH_BAR_WIDTH = 60
     is_depot        = False
     pop_bonus       = 0
@@ -262,12 +260,10 @@ def _make_unit_cls(name: str, display_size: int, select_radius: int):
     })
 
 
-def _make_building_cls(name: str, dw, dh, cw, ch, depot, pop, hbw):
+def _make_building_cls(name: str, dw, dh, depot, pop, hbw):
     return type(name, (EntityProxy,), {
         "DISPLAY_W":        dw,
         "DISPLAY_H":        dh,
-        "COLLISION_W":      cw,
-        "COLLISION_H":      ch,
         "is_depot":         depot,
         "pop_bonus":        pop,
         "HEALTH_BAR_WIDTH": hbw,
@@ -275,10 +271,17 @@ def _make_building_cls(name: str, dw, dh, cw, ch, depot, pop, hbw):
     })
 
 
+def _resource_hit_test(self, sx: float, sy: float, camera) -> bool:
+    wx, wy = camera.world_to_screen(self.x, self.y)
+    half = self.DISPLAY_SIZE * camera.zoom / 2
+    return abs(sx - wx) <= half and abs(sy - wy) <= half
+
+
 def _make_resource_cls(name: str, display_size: int, res_type: str):
     return type(name, (EntityProxy,), {
         "DISPLAY_SIZE":  display_size,
         "resource_type": res_type,
+        "hit_test":      _resource_hit_test,
     })
 
 
@@ -289,8 +292,8 @@ for _n, (_ds, _sr) in _UNIT_SPECS.items():
 
 _PROXY_CLASSES["Pawn"] = _make_unit_cls("Pawn", *_PAWN_SPEC)
 
-for _n, (_dw, _dh, _cw, _ch, _dep, _pop, _hbw) in _BUILDING_SPECS.items():
-    _PROXY_CLASSES[_n] = _make_building_cls(_n, _dw, _dh, _cw, _ch, _dep, _pop, _hbw)
+for _n, (_dw, _dh, _dep, _pop, _hbw) in _BUILDING_SPECS.items():
+    _PROXY_CLASSES[_n] = _make_building_cls(_n, _dw, _dh, _dep, _pop, _hbw)
 
 for _n, _ds in _RESOURCE_DISPLAY.items():
     _res_type = _n.replace("Node", "").lower()   # "gold", "wood", "meat"
@@ -298,6 +301,12 @@ for _n, _ds in _RESOURCE_DISPLAY.items():
 
 # Tower needs extended vision radius for fog-of-war
 _PROXY_CLASSES["Tower"].VISION_RADIUS = 10
+
+# WoodNode.sort_y = y + DISPLAY_SIZE/2 (tree bottom), matching the server entity.
+# Without this, gathering pawns sort after the tree and render on top of it.
+_PROXY_CLASSES["WoodNode"].sort_y = property(
+    lambda self: self.y + self.DISPLAY_SIZE / 2
+)
 
 # Blueprint and Arrow use the base class with generic defaults
 _PROXY_CLASSES["Blueprint"] = type("Blueprint", (EntityProxy,), {"SELECT_RADIUS": 96})
