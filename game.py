@@ -429,6 +429,20 @@ class Game:
         "Monk":    (Monk,    {"gold": 20, "meat": 30}, Monastery),
     }
 
+    def _spiral_spawn(self, building) -> tuple[float, float] | None:
+        angle = random.uniform(0, 2 * math.pi)
+        half_w = building.DISPLAY_W / 2
+        half_h = building.DISPLAY_H / 2
+        min_r = math.hypot(half_w, half_h) + NAV_TILE
+        for radius in range(int(min_r), int(min_r) + 200, NAV_TILE):
+            for step in range(0, 360, 15):
+                a = angle + math.radians(step)
+                cx = building.x + math.cos(a) * radius
+                cy = building.y + math.sin(a) * radius
+                if self.nav_grid.is_walkable(int(cx // NAV_TILE), int(cy // NAV_TILE)):
+                    return cx, cy
+        return None
+
     def _spawn_unit(self, unit_type: str, team: str = "blue", building=None):
         unit_cls, costs, building_cls = self._SPAWN_TABLE[unit_type]
         eco = self.economy[team]
@@ -444,12 +458,13 @@ class Game:
         )
         if spawn_building is None:
             return
+        pos = self._spiral_spawn(spawn_building)
+        if pos is None:
+            raise RuntimeError(f"No walkable spawn position found near {spawn_building}")
         for r, amt in costs.items():
             eco[r] -= amt
-        angle = random.uniform(0, 2 * math.pi)
         unit = self._assign_id(unit_cls(
-            spawn_building.x + math.cos(angle) * 120,
-            spawn_building.y + math.sin(angle) * 120,
+            *pos,
             team=team,
         ))
         (self.pawns if unit_cls is Pawn else self.units).append(unit)
