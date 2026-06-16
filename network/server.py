@@ -14,6 +14,9 @@ import math
 import os
 import struct
 import time
+from datetime import datetime, timezone, timedelta
+
+_UTC = timezone.utc
 
 from game import Game
 from map import TILE_SIZE, NAV_TILE
@@ -86,6 +89,7 @@ class GameServer:
     async def _game_loop(self):
         dt = 1.0 / TICK_RATE
         next_tick_time = time.monotonic()
+        _was_paused = False
 
         while True:
             now = time.monotonic()
@@ -100,6 +104,7 @@ class GameServer:
                 self._apply_command(cmd, player_team)
 
             if self._paused:
+                _was_paused = True
                 next_tick_time = time.monotonic() + dt  # sleep one tick, don't spin
                 self._tick += 1
                 if self._tick % _TICKS_PER_SNAP == 0:
@@ -113,6 +118,11 @@ class GameServer:
                         if not self._manually_paused:
                             self._paused = False
                 continue
+
+            if _was_paused:
+                shift = datetime.now(_UTC) - self.game.last_tick_time
+                self.game.shift_all_production(shift)
+                _was_paused = False
 
             self.game.update(dt)
             self._resolve_pending_garrisons()
@@ -366,8 +376,7 @@ class GameServer:
     # ------------------------------------------------------------------
 
     def _do_spawn(self, unit_type: str, building, team: str):
-        if unit_type in self.game._SPAWN_TABLE:
-            self.game._spawn_unit(unit_type, team=team, building=building)
+        self.game._enqueue_unit(unit_type, team=team, building=building)
 
     def _do_build(self, building_type: str, wx: float, wy: float, pawn_ids: set, team: str):
         from entities.blueprint import Blueprint, BUILDABLE

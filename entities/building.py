@@ -1,6 +1,12 @@
 import math
+from collections import deque
+from datetime import datetime, timezone, timedelta
+
 from entities.entity import Entity
 from entities.projectile import ARROW_DAMAGE, ARROW_SPEED
+
+_UTC = timezone.utc
+_MAX_QUEUE = 5
 
 
 class Building(Entity):
@@ -39,18 +45,43 @@ class Building(Entity):
 # ---------------------------------------------------------------------------
 
 
-class Archery(Building):
-    DISPLAY_W = 192
-    DISPLAY_H = 256
+class ProductionBuilding(Building):
+    """Building that can queue and produce units over time."""
+
+    PRODUCTION_TIME: float = 10.0  # seconds per unit; override per subclass
+
+    def __init__(self, x: float, y: float, team: str, max_hp: int):
+        super().__init__(x, y, team, max_hp)
+        self.production_queue: deque[str] = deque()
+        self.production_end: datetime | None = None
+
+    def enqueue(self, unit_type: str) -> bool:
+        if len(self.production_queue) >= _MAX_QUEUE:
+            return False
+        self.production_queue.append(unit_type)
+        if self.production_end is None:
+            self.production_end = datetime.now(_UTC) + timedelta(seconds=self.PRODUCTION_TIME)
+        return True
+
+    def shift_end(self, delta: timedelta) -> None:
+        if self.production_end is not None:
+            self.production_end += delta
+
+
+class Archery(ProductionBuilding):
+    DISPLAY_W       = 192
+    DISPLAY_H       = 256
+    PRODUCTION_TIME = 10.0
 
     def __init__(self, x: float, y: float, team: str):
         super().__init__(x, y, team, max_hp=300)
         self.sprite_key = f"building/archery/{team}"
 
 
-class Barracks(Building):
-    DISPLAY_W = 192
-    DISPLAY_H = 256
+class Barracks(ProductionBuilding):
+    DISPLAY_W       = 192
+    DISPLAY_H       = 256
+    PRODUCTION_TIME = 12.0
 
     def __init__(self, x: float, y: float, team: str):
         super().__init__(x, y, team, max_hp=350)
@@ -70,9 +101,10 @@ class House(Building):
         self.sprite_key = f"building/house{n}/{team}"
 
 
-class Monastery(Building):
-    DISPLAY_W = 192
-    DISPLAY_H = 320
+class Monastery(ProductionBuilding):
+    DISPLAY_W       = 192
+    DISPLAY_H       = 320
+    PRODUCTION_TIME = 12.0
 
     def __init__(self, x: float, y: float, team: str):
         super().__init__(x, y, team, max_hp=300)
@@ -157,13 +189,14 @@ class Tower(Building):
         return arrows
 
 
-class Castle(Building):
+class Castle(ProductionBuilding):
     DISPLAY_W        = 320
     DISPLAY_H        = 256
     is_depot         = True
     pop_bonus        = 10
     HEALTH_BAR_WIDTH = 80
     VISION_RADIUS    = 8
+    PRODUCTION_TIME  = 8.0
 
     def __init__(self, x: float, y: float, team: str):
         super().__init__(x, y, team, max_hp=500)

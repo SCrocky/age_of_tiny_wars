@@ -1,13 +1,16 @@
 import json
 import math
 import random
+from datetime import datetime, timezone, timedelta
 from map import TileMap, NavGrid, NAV_TILE, TILE_SIZE
 from entities.archer import Archer
 from entities.lancer import Lancer
 from entities.warrior import Warrior
 from entities.monk import Monk
 from entities.pawn import Pawn, Task as PawnTask
-from entities.building import Building, Castle, Archery, Barracks, House, Tower, Monastery
+from entities.building import Building, ProductionBuilding, Castle, Archery, Barracks, House, Tower, Monastery
+
+_UTC = timezone.utc
 from entities.resource import GoldNode, WoodNode, MeatNode
 from entities.projectile import Arrow
 from entities.blueprint import Blueprint
@@ -67,6 +70,8 @@ class Game:
             if not isinstance(r, MeatNode) and not r.depleted:
                 self.nav_grid.block_rect(*r.nav_footprint)
 
+        self.last_tick_time: datetime = datetime.now(_UTC)
+
     # ------------------------------------------------------------------
     # Setup
     # ------------------------------------------------------------------
@@ -93,6 +98,9 @@ class Game:
                 entry["variant"] = int(b.sprite_key.split("/")[1][-1])
             if isinstance(b, Tower) and b.garrisoned_archer is not None:
                 entry["garrisoned_archer"] = {"hp": b.garrisoned_archer.hp}
+            if isinstance(b, ProductionBuilding) and b.production_queue:
+                entry["production_queue"] = list(b.production_queue)
+                entry["production_end"] = b.production_end.isoformat() if b.production_end else None
             buildings_out.append(entry)
 
         blueprints_out = []
@@ -145,8 +153,9 @@ class Game:
 
         teams = list(self.economy.keys())
         data = {
-            "save_version": 1,
-            "timestamp":    datetime.now(timezone.utc).isoformat(),
+            "save_version":  1,
+            "timestamp":     datetime.now(_UTC).isoformat(),
+            "last_tick_time": self.last_tick_time.isoformat(),
             "rows":         self.map.rows,
             "cols":         self.map.cols,
             "tile_px":      TILE_SIZE,
@@ -203,9 +212,20 @@ class Game:
                 archer = self._assign_id(Archer(building.x, building.y, team=building.team))
                 archer.hp = archer_data.get("hp", archer.max_hp)
                 building.garrison(archer)
+            if isinstance(building, ProductionBuilding) and b_data.get("production_queue"):
+                for ut in b_data["production_queue"]:
+                    building.production_queue.append(ut)
+                pe = b_data.get("production_end")
+                if pe:
+                    building.production_end = datetime.fromisoformat(pe)
             if "id" in b_data:
                 _saved_id_map[b_data["id"]] = building
             self.buildings.append(building)
+
+        if "last_tick_time" in scene:
+            saved_ltt = datetime.fromisoformat(scene["last_tick_time"])
+            shift = datetime.now(_UTC) - saved_ltt
+            self.shift_all_production(shift)
 
         for bp_data in scene.get("blueprints", []):
             cls = _BUILDING_CLS.get(bp_data["type"])
@@ -315,6 +335,7 @@ class Game:
             )
 
     def update(self, dt: float):
+        _now = datetime.now(_UTC)
         _combatants = [e for e in self.units + self.pawns + self.buildings if getattr(e, "alive", True)]
         _enemy_pool: dict[str, list] = {}
         _ally_pool:  dict[str, list] = {}
@@ -352,6 +373,8 @@ class Game:
                 for arrow in new_arrows:
                     self._assign_id(arrow)
                 self.arrows.extend(new_arrows)
+            if isinstance(building, ProductionBuilding):
+                self._tick_production(building, _now)
 
         for pawn in self.pawns:
             old_x, old_y = pawn.x, pawn.y
@@ -415,6 +438,7 @@ class Game:
         self.units  = [u for u in self.units  if u.alive]
         self.pawns  = [p for p in self.pawns  if p.alive]
         self.arrows = [a for a in self.arrows if a.alive]
+        self.last_tick_time = _now
         self._recalc_pop()
 
     # ------------------------------------------------------------------
@@ -443,31 +467,50 @@ class Game:
                     return cx, cy
         return None
 
-    def _spawn_unit(self, unit_type: str, team: str = "blue", building=None):
-        unit_cls, costs, building_cls = self._SPAWN_TABLE[unit_type]
+    def _enqueue_unit(self, unit_type: str, team: str, building) -> bool:
+        if unit_type not in self._SPAWN_TABLE:
+            return False
+        _, costs, building_cls = self._SPAWN_TABLE[unit_type]
+        if not isinstance(building, ProductionBuilding):
+            return False
+        if building_cls is not None and not isinstance(building, building_cls):
+            return False
         eco = self.economy[team]
-        if eco["pop"] >= eco["pop_cap"]:
-            return
         if any(eco.get(r, 0) < amt for r, amt in costs.items()):
-            return
-        spawn_building = building or next(
-            (b for b in self.buildings
-             if b.team == team and b.selected and b.alive
-             and (building_cls is None or isinstance(b, building_cls))),
-            None,
-        )
-        if spawn_building is None:
-            return
-        pos = self._spiral_spawn(spawn_building)
-        if pos is None:
-            raise RuntimeError(f"No walkable spawn position found near {spawn_building}")
+            return False
+        if not building.enqueue(unit_type):
+            return False
         for r, amt in costs.items():
             eco[r] -= amt
-        unit = self._assign_id(unit_cls(
-            *pos,
-            team=team,
-        ))
+        return True
+
+    def _tick_production(self, building: ProductionBuilding, now: datetime):
+        if not building.production_queue or building.production_end is None:
+            return
+        if now < building.production_end:
+            return
+        unit_type = building.production_queue[0]
+        eco = self.economy[building.team]
+        if eco["pop"] >= eco["pop_cap"]:
+            building.production_end = now  # mark ready; retry each tick
+            return
+        pos = self._spiral_spawn(building)
+        if pos is None:
+            building.production_end = now  # retry
+            return
+        building.production_queue.popleft()
+        unit_cls = self._SPAWN_TABLE[unit_type][0]
+        unit = self._assign_id(unit_cls(*pos, team=building.team))
         (self.pawns if unit_cls is Pawn else self.units).append(unit)
+        if building.production_queue:
+            building.production_end = datetime.now(_UTC) + timedelta(seconds=building.PRODUCTION_TIME)
+        else:
+            building.production_end = None
+
+    def shift_all_production(self, delta: timedelta):
+        for b in self.buildings:
+            if isinstance(b, ProductionBuilding):
+                b.shift_end(delta)
 
     @staticmethod
     def _formation_offsets(count: int) -> list[tuple[int, int]]:

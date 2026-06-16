@@ -34,7 +34,7 @@ Commands use the same length-prefix framing.
 import struct
 import msgpack
 
-from entities.building import Building, Castle, Archery, Barracks, House, Tower
+from entities.building import Building, ProductionBuilding, Castle, Archery, Barracks, House, Tower
 from entities.blueprint import Blueprint
 from entities.projectile import Arrow
 from entities.resource import ResourceNode, GoldNode, WoodNode, MeatNode
@@ -101,6 +101,10 @@ def _serialize_entity(entity) -> dict:
         base["hp"]         = entity.hp
         base["max_hp"]     = entity.max_hp
         base["sprite_key"] = entity.sprite_key
+        if isinstance(entity, ProductionBuilding):
+            base["production_queue"] = list(entity.production_queue)
+            base["production_end"]   = entity.production_end.isoformat() if entity.production_end else None
+            base["production_time"]  = entity.PRODUCTION_TIME
         return base
 
     if isinstance(entity, Arrow):

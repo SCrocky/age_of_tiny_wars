@@ -8,11 +8,15 @@ This module re-exports HUD so callers can import from the rendering package.
 
 __all__ = ["HUD"]
 
+from datetime import datetime, timezone
+
 import pygame
 from pygame._sdl2.video import Renderer
 import assets
 import texture_cache
 from entities.teams import AVATAR_ROW_OFFSET
+
+_UTC = timezone.utc
 
 _UI = "assets/UI Elements/UI Elements"
 
@@ -272,7 +276,11 @@ class HUD:
         ph_info  = 116
         has_pawn = any(type(e).__name__ == "Pawn" for e in selected)
         ph_build = BUTTON_SIZE + pad * 2 if has_pawn else 0
-        ph       = ph_info + ph_build
+        is_prod  = (len(selected) == 1
+                    and type(selected[0]).__name__ in _PRODUCTION
+                    and bool(getattr(selected[0], "production_queue", None)))
+        ph_prod  = 36 if is_prod else 0
+        ph       = ph_info + ph_build + ph_prod
         pw       = min(self.sw - 40, 640)
         px       = (self.sw - pw) // 2
         py       = self.sh - ph - pad
@@ -282,8 +290,10 @@ class HUD:
             self._draw_single(renderer, selected[0], px, py, pw, ph_info, eco)
         else:
             self._draw_multi(renderer, selected, px, py, pw, ph_info)
+        if is_prod:
+            self._draw_production_info(renderer, selected[0], px, py + ph_info, pw)
         if has_pawn:
-            self._draw_build_row(renderer, px, py + ph_info, pw, eco, BUILDABLE)
+            self._draw_build_row(renderer, px, py + ph_info + ph_prod, pw, eco, BUILDABLE)
 
     def _draw_build_row(self, renderer: Renderer, px: int, py: int, pw: int,
                         eco: dict, buildable: dict):
@@ -303,6 +313,54 @@ class HUD:
                 affordable = self._can_afford(eco, costs),
                 action     = f"build_{name.lower()}",
             )
+
+    def _draw_production_info(self, renderer: Renderer, ent, px: int, py: int, pw: int):
+        """Draw queued unit icons with a progress nub under the current item."""
+        pad   = self.PAD
+        c     = self.CORNER
+        queue = getattr(ent, "production_queue", [])
+        if not queue:
+            return
+
+        prod_end_iso = getattr(ent, "production_end", None)
+        prod_time    = getattr(ent, "production_time", 1.0) or 1.0
+        icon_sz      = 20
+        nub_h        = 4
+        icon_y       = py + pad
+        nub_y        = icon_y + icon_sz + 2
+
+        # Compute progress ratio once
+        remaining = 0.0
+        if prod_end_iso:
+            prod_end  = datetime.fromisoformat(prod_end_iso)
+            remaining = max(0.0, (prod_end - datetime.now(_UTC)).total_seconds())
+        ratio = max(0.0, min(1.0, 1.0 - remaining / prod_time))
+
+        renderer.draw_blend_mode = pygame.BLENDMODE_NONE
+
+        # Draw each queued icon left to right; progress nub under the first
+        qx = px + c + pad
+        for i, unit_type in enumerate(queue):
+            ai = _avatar_idx(unit_type, ent.team)
+            texture_cache.get_texture(self._get_btn_avatar(ai)).draw(
+                dstrect=(qx, icon_y, icon_sz, icon_sz)
+            )
+            if i == 0:
+                renderer.draw_color = (60, 60, 60, 255)
+                renderer.fill_rect(pygame.Rect(qx, nub_y, icon_sz, nub_h))
+                fill_w = max(0, int(icon_sz * ratio))
+                if fill_w:
+                    col = (80, 200, 100, 255) if ratio < 1.0 else (200, 200, 80, 255)
+                    renderer.draw_color = col
+                    renderer.fill_rect(pygame.Rect(qx, nub_y, fill_w, nub_h))
+            qx += icon_sz + 2
+
+        # Time label to the right of all icons
+        label    = "ready" if remaining <= 0 else f"{remaining:.0f}s"
+        lbl_surf = self._font.render(label, True, (220, 220, 180))
+        lbl_tex  = texture_cache.make_texture(lbl_surf)
+        lw, lh   = lbl_surf.get_size()
+        lbl_tex.draw(dstrect=(qx + pad, icon_y + (icon_sz - lh) // 2, lw, lh))
 
     def _draw_single(self, renderer: Renderer, ent, px, py, pw, ph, eco: dict):
         pad = self.PAD

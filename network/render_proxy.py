@@ -112,6 +112,10 @@ class EntityProxy:
 
         # Tower garrison
         self.garrisoned:              bool = False
+        # Production building
+        self.production_queue: list[str]  = []
+        self.production_end:   str | None = None
+        self.production_time:  float      = 0.0
         self.garrisoned_anim_key:     str  = "idle"
         self.garrisoned_frame_idx:    int  = 0
         self.garrisoned_facing_right: bool = True
@@ -229,6 +233,11 @@ class EntityProxy:
         self.garrisoned_anim_key     = data.get("garrisoned_anim_key", "idle")
         self.garrisoned_frame_idx    = data.get("garrisoned_frame_idx", 0)
         self.garrisoned_facing_right = data.get("garrisoned_facing_right", True)
+
+        # Production building
+        self.production_queue = data.get("production_queue", [])
+        self.production_end   = data.get("production_end")
+        self.production_time  = data.get("production_time", 0.0)
 
         # Monk heal effect
         if data.get("type") == "Monk":
