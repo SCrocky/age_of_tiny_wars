@@ -353,6 +353,16 @@ class Game:
                  + [p for p in self.pawns if p.alive] \
                  + sheep
 
+        # Intentionally idle units (no path, no target) — moving allies can
+        # pass through them during resolve_move; separate_units pushes them
+        # aside afterwards.  Computed once so the per-unit filter is O(n).
+        stationary_ids = {
+            id(d) for d in dynamics
+            if not getattr(d, "path", None)
+            and getattr(d, "attack_target", None) is None
+            and getattr(d, "_approach_target", None) is None
+        }
+
         for unit in self.units:
             old_x, old_y = unit.x, unit.y
             if isinstance(unit, Monk):
@@ -363,7 +373,12 @@ class Game:
                     self._assign_id(arrow)
                 self.arrows.extend(new_arrows)
             if unit.x != old_x or unit.y != old_y:
-                collision.resolve_move(unit, old_x, old_y, grid, dynamics)
+                dyn = [d for d in dynamics if not (
+                    id(d) in stationary_ids
+                    and (getattr(d, "team", None) == unit.team
+                         or getattr(d, "team", None) is None)
+                )]
+                collision.resolve_move(unit, old_x, old_y, grid, dyn)
 
         for building in self.buildings:
             if isinstance(building, Tower) and building.garrisoned_archer is not None:
@@ -383,7 +398,12 @@ class Game:
                 self.economy[pawn.team][resource_type] += amount
             if pawn.x != old_x or pawn.y != old_y:
                 skip_wood = pawn._task is PawnTask.GATHER
-                collision.resolve_move(pawn, old_x, old_y, grid, dynamics, skip_wood)
+                dyn = [d for d in dynamics if not (
+                    id(d) in stationary_ids
+                    and (getattr(d, "team", None) == pawn.team
+                         or getattr(d, "team", None) is None)
+                )]
+                collision.resolve_move(pawn, old_x, old_y, grid, dyn, skip_wood)
 
         # Prune depleted static resources from the collision grid so the hot
         # loop never has to filter them. Pawns may have just depleted a node

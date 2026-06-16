@@ -76,7 +76,7 @@ class Pawn(Unit):
 
     DISPLAY_SIZE    = 80
     MOVE_SPEED      = 80.0
-    DEPOSIT_RADIUS  = 12.0
+    DEPOSIT_RADIUS  = 15.0
     SELECT_RADIUS   = 18
 
     def __init__(self, x: float, y: float, team: str = "blue"):
@@ -103,6 +103,16 @@ class Pawn(Unit):
     # ------------------------------------------------------------------
     # Commands
     # ------------------------------------------------------------------
+
+    def cancel_task(self):
+        """Cancel any active gather/build task and return to idle."""
+        if self._task == Task.IDLE:
+            return
+        self._task          = Task.IDLE
+        self._resource_node = None
+        self._blueprint     = None
+        self.path           = []
+        self._approach_target = None
 
     def assign_build(self, blueprint, blueprints=None):
         """Assign this pawn to construct a blueprint."""
@@ -141,9 +151,14 @@ class Pawn(Unit):
             deposit = {}
 
         if self._approach_target is not None:
+            if self.path:
+                self._tick_stuck(dt, nav_grid)
             self._step_approach(dt)
         elif self.path:
+            self._tick_stuck(dt, nav_grid)
             self._move_along_path(dt)
+            if not self.path and self._task == Task.IDLE:
+                self._try_advance_waypoints(nav_grid)
 
         self._tick_animation(dt)
         return deposit
