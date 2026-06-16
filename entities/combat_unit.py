@@ -53,6 +53,19 @@ class CombatUnit(Unit):
                 lambda e: e.alive and e.team != self.team,
                 NEARBY_ENEMY_RADIUS,
             )
+            # No nearby replacement — resume queued waypoints if any
+            if self.attack_target is None:
+                self._try_advance_waypoints(nav_grid)
+
+        # Auto-engage: spot enemies while following a waypoint path
+        if self.attack_target is None and self.path and self._enemy_pool:
+            nearest = self.search_nearby_for(
+                self._enemy_pool,
+                lambda e: e.alive and e.team != self.team,
+                self.VISION_RADIUS * TILE_SIZE * 0.75,
+            )
+            if nearest is not None:
+                self.attack_target = nearest
 
         spawned = []
         if self.attack_target is not None:
@@ -72,7 +85,10 @@ class CombatUnit(Unit):
             self._step_approach(dt)
         elif self.path:
             self._state = "run"
+            self._tick_stuck(dt, nav_grid)
             self._move_along_path(dt)
+            if not self.path:
+                self._try_advance_waypoints(nav_grid)
         else:
             nearest = self.search_nearby_for(
                 self._enemy_pool,

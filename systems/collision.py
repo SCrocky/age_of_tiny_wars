@@ -38,7 +38,7 @@ import os
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 import pygame  # noqa: E402
 
-from map import TILE_SIZE  # noqa: E402
+from map import TILE_SIZE, NAV_TILE  # noqa: E402
 
 _JSON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                           "collision_masks.json")
@@ -336,6 +336,8 @@ _AVOIDANCE_CLEARANCE: float = 4.0
 # Unit-vs-unit separation parameters.
 _SEP_FRACTION:        float = 0.5   # fraction of overlap corrected per tick
 _HEAD_ON_THRESH:      float = -0.7  # alignment dot below this → CW bypass
+_AVOID_RADIUS_MULT:   float = 2.5   # look-ahead zone as multiple of r_sum
+_AVOID_STRENGTH:      float = 5.0   # max pre-emptive lateral push (px/tick)
 
 
 def _find_static_blocker(entity, grid: StaticGrid, skip_wood: bool):
@@ -463,8 +465,8 @@ def _unit_vel_dir(entity) -> tuple[float, float]:
     path = getattr(entity, "path", None)
     if path:
         col, row = path[0]
-        dx = col * TILE_SIZE + TILE_SIZE * 0.5 - entity.x
-        dy = row * TILE_SIZE + TILE_SIZE * 0.5 - entity.y
+        dx = col * NAV_TILE + NAV_TILE * 0.5 - entity.x
+        dy = row * NAV_TILE + NAV_TILE * 0.5 - entity.y
         d = (dx * dx + dy * dy) ** 0.5
         if d > 1e-6:
             return dx / d, dy / d
@@ -532,71 +534,123 @@ def separate_units(dynamics) -> None:
             dy = b.y - a.y
             dist2 = dx * dx + dy * dy
             r_sum = ra + rb
-            if dist2 >= r_sum * r_sum:
-                continue
+            r_avoid = r_sum * _AVOID_RADIUS_MULT
 
-            dist    = dist2 ** 0.5 or 1e-6
-            overlap = (r_sum - dist) * _SEP_FRACTION
+            if dist2 >= r_avoid * r_avoid:
+                continue  # outside both overlap and avoidance zones
 
-            # Normalised A→B separation axis.
+            dist = dist2 ** 0.5 or 1e-6
             sx = dx / dist
             sy = dy / dist
-
             bvx, bvy = _unit_vel_dir(b)
-            alignment = avx * bvx + avy * bvy
 
-            if alignment < _HEAD_ON_THRESH:
-                # Head-on: screen-CW perpendicular of each unit's own velocity.
-                # Screen-CW(vx, vy) = (-vy, vx).
-                # Applying CW to both velocities sends them around each other
-                # in the same rotational sense without cancellation.
-                force_x[i] += -avy * overlap
-                force_y[i] +=  avx * overlap
-                force_x[j] += -bvy * overlap
-                force_y[j] +=  bvx * overlap
-                # Plus a radial half-push so overlap shrinks even when the
-                # paths don't change between ticks (the tangential spin alone
-                # leaves units closing at MOVE_SPEED while drifting sideways
-                # by only `overlap` px — radial keeps the loop convergent).
-                half = overlap * 0.5
-                force_x[i] -= sx * half
-                force_y[i] -= sy * half
-                force_x[j] += sx * half
-                force_y[j] += sy * half
+            if dist2 < r_sum * r_sum:
+                # ---- Overlapping: reactive separation ----
+                overlap = (r_sum - dist) * _SEP_FRACTION
+
+                # Allied push-through: a moving unit shoves a stationary ally
+                # out of its path instead of the two blocking each other.
+                # "Stationary" = no active path, attack target, or approach.
+                a_moving = avx != 0.0 or avy != 0.0
+                b_moving = bvx != 0.0 or bvy != 0.0
+                pushed = False
+                a_team = getattr(a, "team", None)
+                b_team = getattr(b, "team", None)
+                # Allow push-through between same-team allies OR when either
+                # unit is neutral (e.g. sheep): moving unit shoves it aside.
+                allow_push = (a_team == b_team and a_team is not None) \
+                          or a_team is None or b_team is None
+                if allow_push:
+                    if a_moving and not b_moving:
+                        # Moving A pushes stationary B aside; A barely slows.
+                        force_x[j] += sx * overlap
+                        force_y[j] += sy * overlap
+                        force_x[i] -= sx * overlap * 0.1
+                        force_y[i] -= sy * overlap * 0.1
+                        pushed = True
+                    elif b_moving and not a_moving:
+                        # Moving B pushes stationary A aside; B barely slows.
+                        force_x[i] -= sx * overlap
+                        force_y[i] -= sy * overlap
+                        force_x[j] += sx * overlap * 0.1
+                        force_y[j] += sy * overlap * 0.1
+                        pushed = True
+
+                if not pushed:
+                    alignment = avx * bvx + avy * bvy
+
+                if not pushed and alignment < _HEAD_ON_THRESH:
+                    # Head-on: screen-CW perpendicular of each unit's own velocity.
+                    # Screen-CW(vx, vy) = (-vy, vx).
+                    # Applying CW to both velocities sends them around each other
+                    # in the same rotational sense without cancellation.
+                    force_x[i] += -avy * overlap
+                    force_y[i] +=  avx * overlap
+                    force_x[j] += -bvy * overlap
+                    force_y[j] +=  bvx * overlap
+                    # Plus a radial half-push so overlap shrinks even when the
+                    # paths don't change between ticks (the tangential spin alone
+                    # leaves units closing at MOVE_SPEED while drifting sideways
+                    # by only `overlap` px — radial keeps the loop convergent).
+                    half = overlap * 0.5
+                    force_x[i] -= sx * half
+                    force_y[i] -= sy * half
+                    force_x[j] += sx * half
+                    force_y[j] += sy * half
+                elif not pushed:
+                    # Radial push, blended toward lateral for co-movers.
+                    fx, fy = sx, sy
+
+                    if alignment > 0.0:
+                        # Average forward direction of the pair.
+                        fw_x = avx + bvx
+                        fw_y = avy + bvy
+                        fw_d = (fw_x * fw_x + fw_y * fw_y) ** 0.5
+                        if fw_d > 1e-6:
+                            fw_x /= fw_d
+                            fw_y /= fw_d
+                            # Lateral component of the separation axis.
+                            fwd_dot = fx * fw_x + fy * fw_y
+                            lat_x   = fx - fwd_dot * fw_x
+                            lat_y   = fy - fwd_dot * fw_y
+                            lat_d   = (lat_x * lat_x + lat_y * lat_y) ** 0.5
+                            if lat_d > 1e-6:
+                                lat_x /= lat_d
+                                lat_y /= lat_d
+                                # Blend: alignment=0 → radial, alignment=1 → lateral.
+                                t  = alignment
+                                fx = fx * (1.0 - t) + lat_x * t
+                                fy = fy * (1.0 - t) + lat_y * t
+                                f_d = (fx * fx + fy * fy) ** 0.5
+                                if f_d > 1e-6:
+                                    fx /= f_d
+                                    fy /= f_d
+
+                    half = overlap * 0.5
+                    force_x[i] -= fx * half   # push A away from B
+                    force_y[i] -= fy * half
+                    force_x[j] += fx * half   # push B away from A
+                    force_y[j] += fy * half
+
             else:
-                # Radial push, blended toward lateral for co-movers.
-                fx, fy = sx, sy
-
-                if alignment > 0.0:
-                    # Average forward direction of the pair.
-                    fw_x = avx + bvx
-                    fw_y = avy + bvy
-                    fw_d = (fw_x * fw_x + fw_y * fw_y) ** 0.5
-                    if fw_d > 1e-6:
-                        fw_x /= fw_d
-                        fw_y /= fw_d
-                        # Lateral component of the separation axis.
-                        fwd_dot = fx * fw_x + fy * fw_y
-                        lat_x   = fx - fwd_dot * fw_x
-                        lat_y   = fy - fwd_dot * fw_y
-                        lat_d   = (lat_x * lat_x + lat_y * lat_y) ** 0.5
-                        if lat_d > 1e-6:
-                            lat_x /= lat_d
-                            lat_y /= lat_d
-                            # Blend: alignment=0 → radial, alignment=1 → lateral.
-                            t  = alignment
-                            fx = fx * (1.0 - t) + lat_x * t
-                            fy = fy * (1.0 - t) + lat_y * t
-                            f_d = (fx * fx + fy * fy) ** 0.5
-                            if f_d > 1e-6:
-                                fx /= f_d
-                                fy /= f_d
-
-                half = overlap * 0.5
-                force_x[i] -= fx * half   # push A away from B
-                force_y[i] -= fy * half
-                force_x[j] += fx * half   # push B away from A
-                force_y[j] += fy * half
+                # ---- Avoidance zone: proactive steering (partial RVO) ----
+                # closing = d/dt(dist): negative when approaching, positive when diverging.
+                closing = -(avx - bvx) * sx - (avy - bvy) * sy
+                if closing >= -0.1:
+                    continue  # diverging or stationary — no action needed
+                proximity = 1.0 - dist / r_avoid      # 0 at edge → 1 at r_sum
+                strength  = -closing * proximity * _AVOID_STRENGTH
+                # Lateral direction perpendicular to sep axis; pick the side
+                # that A's velocity is already leaning toward so both units
+                # steer in the same rotational sense (mirrors RVO's shared
+                # responsibility).
+                lx, ly = -sy, sx
+                if avx * lx + avy * ly < 0:
+                    lx, ly = sy, -sx
+                force_x[i] += lx * strength
+                force_y[i] += ly * strength
+                force_x[j] -= lx * strength   # B steers the opposite way
+                force_y[j] -= ly * strength
 
     for i, entity in enumerate(dynamics):
         entity.x += force_x[i]

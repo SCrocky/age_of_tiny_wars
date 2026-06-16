@@ -1,5 +1,6 @@
 import math
 import random
+from collections import deque
 from entities.entity import Entity
 from map import NAV_TILE
 
@@ -7,11 +8,14 @@ from map import NAV_TILE
 class Unit(Entity):
     """Intermediate base for all mobile units (combat and worker)."""
 
-    MOVE_SPEED      = 96.0
-    WAYPOINT_RADIUS = 4.0
-    CHASE_INTERVAL  = 0.5
-    DISPLAY_SIZE    = 96
-    SELECT_RADIUS   = 20
+    MOVE_SPEED           = 96.0
+    WAYPOINT_RADIUS      = 4.0
+    CHASE_INTERVAL       = 0.5
+    DISPLAY_SIZE         = 96
+    SELECT_RADIUS        = 20
+    STUCK_CHECK_INTERVAL = 0.5   # seconds between position snapshots
+    STUCK_DISTANCE       = 10.0  # px — less movement than this counts as stuck
+    STUCK_REPATH_MAX     = 2     # consecutive stuck checks before forced repath
 
     def __init__(self, x: float, y: float, team: str, max_hp: int = 100):
         super().__init__(x, y, team, max_hp)
@@ -26,16 +30,25 @@ class Unit(Entity):
         self._path_future = None   # pending async A* result
         # (tx, ty, arrive_radius) set by _navigate_to; consumed once per update tick.
         self._approach_target: tuple[float, float, float] | None = None
+        self._waypoint_queue: deque[tuple[int, int]] = deque()
+        self._stuck_timer:      float        = 0.0
+        self._stuck_count:      int          = 0
+        self._stuck_dist_to_wp: float | None = None
 
     # ------------------------------------------------------------------
     # Commands
     # ------------------------------------------------------------------
 
-    def set_path(self, path: list[tuple[int, int]]):
+    def set_path(self, path: list[tuple[int, int]], clear_queue: bool = True):
         self._path_future = None   # discard any pending repath
         self.path = list(path)
         self.attack_target = None
         self._approach_target = None
+        if clear_queue:
+            self._waypoint_queue.clear()
+        self._stuck_timer      = 0.0
+        self._stuck_count      = 0
+        self._stuck_dist_to_wp = None
         if path:
             self._arrival_offset = (random.uniform(-12.0, 12.0), random.uniform(-12.0, 12.0))
         else:
@@ -47,6 +60,70 @@ class Unit(Entity):
         self._enemy_pool   = enemy_pool if enemy_pool is not None else []
         self.path          = []
         self._approach_target = None
+
+    def _try_advance_waypoints(self, nav_grid) -> bool:
+        """Pop next queued waypoint and pathfind to it. Returns True if advanced."""
+        if not self._waypoint_queue or nav_grid is None:
+            return False
+        from systems.pathfinding import astar
+        nav_col, nav_row = self._waypoint_queue.popleft()
+        start = (int(self.x // NAV_TILE), int(self.y // NAV_TILE))
+        path = astar(nav_grid, start, (nav_col, nav_row))
+        if path:
+            self.path = path
+            self._arrival_offset = (random.uniform(-12.0, 12.0), random.uniform(-12.0, 12.0))
+            self._stuck_timer      = 0.0
+            self._stuck_count      = 0
+            self._stuck_dist_to_wp = None
+            return True
+        return False
+
+    def _tick_stuck(self, dt: float, nav_grid) -> None:
+        """Detect lack of progress toward the current waypoint and force a repath."""
+        if not self.path:
+            self._stuck_timer      = 0.0
+            self._stuck_count      = 0
+            self._stuck_dist_to_wp = None
+            return
+        self._stuck_timer += dt
+        if self._stuck_timer < self.STUCK_CHECK_INTERVAL:
+            return
+        self._stuck_timer = 0.0
+        col, row = self.path[0]
+        wp_x = col * NAV_TILE + NAV_TILE / 2
+        wp_y = row * NAV_TILE + NAV_TILE / 2
+        dist_now = math.hypot(wp_x - self.x, wp_y - self.y)
+        if self._stuck_dist_to_wp is not None:
+            progress = self._stuck_dist_to_wp - dist_now
+            if progress < self.STUCK_DISTANCE:
+                self._stuck_count += 1
+                if self._stuck_count >= self.STUCK_REPATH_MAX:
+                    self._stuck_count      = 0
+                    self._stuck_dist_to_wp = None
+                    self._force_repath(nav_grid)
+                    return
+            else:
+                self._stuck_count = 0
+        self._stuck_dist_to_wp = dist_now
+
+    def _force_repath(self, nav_grid) -> None:
+        """Repath to the path's final destination from current position with jitter."""
+        if not self.path or nav_grid is None:
+            return
+        from systems.pathfinding import astar
+        goal_col, goal_row = self.path[-1]
+        jitter_c = random.randint(-4, 4)
+        jitter_r = random.randint(-4, 4)
+        gc, gr = nav_grid.nearest_walkable(goal_col + jitter_c, goal_row + jitter_r)
+        sc = int(self.x // NAV_TILE)
+        sr = int(self.y // NAV_TILE)
+        if not nav_grid.is_walkable(sc, sr):
+            sc, sr = nav_grid.nearest_walkable(sc, sr)
+        new_path = astar(nav_grid, (sc, sr), (gc, gr))
+        if new_path:
+            self.path              = new_path
+            self._stuck_dist_to_wp = None
+            self._arrival_offset   = (random.uniform(-12.0, 12.0), random.uniform(-12.0, 12.0))
 
     # ------------------------------------------------------------------
     # Shared movement helpers

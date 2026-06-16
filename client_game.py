@@ -86,6 +86,7 @@ class ClientGame:
         self._fog_frame: int = 0
 
         self._control_groups: dict[int, list[int]] = {}
+        self._waypoint_preview: list[tuple[float, float]] = []
 
         self._winner: str | None = None
         self._paused: bool = False
@@ -428,6 +429,7 @@ class ClientGame:
         if not (mods & pygame.KMOD_SHIFT):
             for e in all_mine:
                 e.selected = False
+            self._waypoint_preview.clear()
         if clicked:
             clicked.selected = (
                 not clicked.selected if (mods & pygame.KMOD_SHIFT) else True
@@ -444,6 +446,7 @@ class ClientGame:
         if not (mods & pygame.KMOD_SHIFT):
             for e in self._my_entities(include_buildings=True):
                 e.selected = False
+            self._waypoint_preview.clear()
         for e in self._units + self._pawns:
             if e.team != self.player_team:
                 continue
@@ -520,12 +523,25 @@ class ClientGame:
         goal_row = max(0, min(int(wy // TILE_SIZE), self.map.rows - 1))
         all_sel = sel_units + sel_pawns
         if all_sel:
-            self._cmd_queue.put({
-                "type":     "CMD_MOVE",
-                "unit_ids": [u.entity_id for u in all_sel],
-                "goal_col": goal_col,
-                "goal_row": goal_row,
-            })
+            mods = pygame.key.get_mods()
+            if mods & pygame.KMOD_CTRL:
+                self._cmd_queue.put({
+                    "type":     "CMD_WAYPOINT_APPEND",
+                    "unit_ids": [u.entity_id for u in all_sel],
+                    "goal_col": goal_col,
+                    "goal_row": goal_row,
+                })
+                tile_cx = (goal_col + 0.5) * TILE_SIZE
+                tile_cy = (goal_row + 0.5) * TILE_SIZE
+                self._waypoint_preview.append((tile_cx, tile_cy))
+            else:
+                self._waypoint_preview.clear()
+                self._cmd_queue.put({
+                    "type":     "CMD_MOVE",
+                    "unit_ids": [u.entity_id for u in all_sel],
+                    "goal_col": goal_col,
+                    "goal_row": goal_row,
+                })
 
     def _emit_spawn(self, unit_type: str):
         sel_building = next(
@@ -666,6 +682,8 @@ class ClientGame:
         finally:
             self._restore_lerp()
 
+        self._draw_waypoint_preview()
+
         # Switch to window-pixel space for HUD and overlays.
         self.viewport.apply_window(renderer)
         win_w = self.viewport.window_w
@@ -731,6 +749,26 @@ class ClientGame:
 
         if self._winner:
             self._draw_winner()
+
+    def _draw_waypoint_preview(self):
+        if not self._waypoint_preview:
+            return
+        cam = self.camera
+        renderer = self.renderer
+        points = [cam.world_to_screen(wx, wy) for wx, wy in self._waypoint_preview]
+        renderer.draw_blend_mode = pygame.BLENDMODE_BLEND
+        renderer.draw_color = (255, 220, 50, 200)
+        for i in range(len(points) - 1):
+            renderer.draw_line(points[i], points[i + 1])
+        for i, (sx, sy) in enumerate(points):
+            r = 7
+            renderer.draw_color = (255, 220, 50, 230)
+            renderer.fill_rect(pygame.Rect(int(sx - r), int(sy - r), r * 2, r * 2))
+            surf = self._font_hint.render(str(i + 1), True, (0, 0, 0))
+            tex = texture_cache.make_texture(surf)
+            tw, th = surf.get_size()
+            tex.draw(dstrect=(int(sx - tw // 2), int(sy - th // 2), tw, th))
+        renderer.draw_blend_mode = pygame.BLENDMODE_NONE
 
     def _draw_drag_box(self):
         if not self._dragging or not self._drag_start:

@@ -262,8 +262,33 @@ class GameServer:
                 )
                 start = (int(unit.x // NAV_TILE), int(unit.y // NAV_TILE))
                 path = astar(self.game.nav_grid, start, dest)
+                if hasattr(unit, 'cancel_task'):
+                    unit.cancel_task()
                 unit.set_path(path)
                 self._pending_garrisons.pop(unit.entity_id, None)
+
+        elif kind == "CMD_WAYPOINT_APPEND":
+            ids = set(cmd.get("unit_ids", []))
+            _nav_scale = TILE_SIZE // NAV_TILE
+            goal_nav_col = cmd.get("goal_col", 0) * _nav_scale
+            goal_nav_row = cmd.get("goal_row", 0) * _nav_scale
+            all_movable = self.game.units + self.game.pawns
+            targets = [u for u in all_movable if u.entity_id in ids and u.team == player_team]
+            offsets = self.game._formation_offsets(len(targets))
+            for unit, (dc, dr) in zip(targets, offsets):
+                dest = self.game.nav_grid.nearest_walkable(
+                    goal_nav_col + dc * _nav_scale,
+                    goal_nav_row + dr * _nav_scale,
+                )
+                if hasattr(unit, 'cancel_task'):
+                    unit.cancel_task()
+                unit._waypoint_queue.append(dest)
+                # If unit is idle, immediately start moving to the first queued waypoint
+                if not unit.path and getattr(unit, 'attack_target', None) is None:
+                    nav_col, nav_row = unit._waypoint_queue.popleft()
+                    start = (int(unit.x // NAV_TILE), int(unit.y // NAV_TILE))
+                    path = astar(self.game.nav_grid, start, (nav_col, nav_row))
+                    unit.set_path(path, clear_queue=False)
 
         elif kind == "CMD_ATTACK":
             ids = set(cmd.get("unit_ids", []))
