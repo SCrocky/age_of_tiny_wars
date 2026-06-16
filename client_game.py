@@ -8,6 +8,7 @@ All player actions (move, attack, spawn…) are encoded as command dicts
 placed in _cmd_queue; client_main.py drains this queue and sends them.
 """
 
+import math
 import queue
 import time
 
@@ -28,6 +29,15 @@ from entities.teams import BANNER_COLORS, teams_from_scene
 
 
 DRAG_THRESHOLD = 5
+
+# Unit MOVE_SPEED values mirrored from their entity classes (px/s).
+_PREDICTION_SPEEDS: dict[str, float] = {
+    "Archer":  96.0,
+    "Warrior": 80.0,
+    "Lancer":  88.0,
+    "Monk":    96.0,
+    "Pawn":    80.0,
+}
 
 
 class ClientGame:
@@ -87,6 +97,9 @@ class ClientGame:
 
         self._control_groups: dict[int, list[int]] = {}
 
+        # entity_id → (target_x, target_y, speed) — cleared on snapshot reconcile
+        self._predictions: dict[int, tuple[float, float, float]] = {}
+
         self._winner: str | None = None
         self._paused: bool = False
         self._saving: bool = False
@@ -135,26 +148,43 @@ class ClientGame:
         if eco:
             self.economy = eco
 
-        incoming_ids = set()
-        for data in snap.get("entities", []):
-            eid = data["id"]
-            incoming_ids.add(eid)
-            if eid in self._proxies:
-                self._proxies[eid].update_from(data)
-            else:
-                self._proxies[eid] = make_proxy(data)
+        is_delta = snap.get("delta", False)
 
-        for dead_id in set(self._proxies) - incoming_ids:
-            del self._proxies[dead_id]
-
-        if not self._camera_on_castle:
+        if is_delta:
+            # Merge: update/add changed entities, remove explicitly deleted ones.
             for data in snap.get("entities", []):
-                if (data.get("type") == "Castle"
-                        and data.get("team") == self.player_team):
-                    cx = data["x"] - self.w / 2 / self.camera.zoom
-                    cy = data["y"] - self.h / 2 / self.camera.zoom
-                    self.camera.x = cx
-                    self.camera.y = cy
+                eid = data["id"]
+                if eid in self._proxies:
+                    self._proxies[eid].update_from(data)
+                else:
+                    self._proxies[eid] = make_proxy(data)
+                # Server position is authoritative — drop prediction for this entity.
+                self._predictions.pop(eid, None)
+            for eid in snap.get("removed", []):
+                self._proxies.pop(eid, None)
+                self._predictions.pop(eid, None)
+        else:
+            # Full snapshot: rebuild proxies from scratch.
+            incoming_ids = set()
+            for data in snap.get("entities", []):
+                eid = data["id"]
+                incoming_ids.add(eid)
+                if eid in self._proxies:
+                    self._proxies[eid].update_from(data)
+                else:
+                    self._proxies[eid] = make_proxy(data)
+                self._predictions.pop(eid, None)
+            for dead_id in set(self._proxies) - incoming_ids:
+                del self._proxies[dead_id]
+                self._predictions.pop(dead_id, None)
+
+        # Camera: find our castle from proxies (works for both full and delta).
+        if not self._camera_on_castle:
+            for proxy in self._proxies.values():
+                if (type(proxy).__name__ == "Castle"
+                        and proxy.team == self.player_team):
+                    self.camera.x = proxy.x - self.w / 2 / self.camera.zoom
+                    self.camera.y = proxy.y - self.h / 2 / self.camera.zoom
                     self._camera_on_castle = True
                     break
 
@@ -190,7 +220,9 @@ class ClientGame:
 
         elapsed = time.monotonic() - self._t_curr
         interval = self._t_curr - self._t_prev
-        alpha = min(1.0, elapsed / max(0.001, interval))
+        # Allow alpha > 1.0 so we extrapolate when the next snapshot is late.
+        # Capped at 2.0 to prevent runaway overshoots.
+        alpha = min(2.0, elapsed / max(0.001, interval))
 
         prev_data = self._snap_prev_by_id.get(proxy.entity_id)
         if prev_data is None:
@@ -372,6 +404,25 @@ class ClientGame:
             timer -= dt
             self._save_toast = (text, timer) if timer > 0 else None
 
+        # Advance client-side movement predictions between server snapshots.
+        done: list[int] = []
+        for eid, (tx, ty, speed) in self._predictions.items():
+            proxy = self._proxies.get(eid)
+            if proxy is None:
+                done.append(eid)
+                continue
+            dx = tx - proxy.x
+            dy = ty - proxy.y
+            dist = math.hypot(dx, dy)
+            if dist < 1.0:
+                done.append(eid)
+                continue
+            step = min(speed * dt, dist)
+            proxy.x += dx / dist * step
+            proxy.y += dy / dist * step
+        for eid in done:
+            del self._predictions[eid]
+
     # ------------------------------------------------------------------
     # Click handlers
     # ------------------------------------------------------------------
@@ -520,6 +571,13 @@ class ClientGame:
         goal_row = max(0, min(int(wy // TILE_SIZE), self.map.rows - 1))
         all_sel = sel_units + sel_pawns
         if all_sel:
+            # Immediately start moving proxies toward the click so the client
+            # feels responsive before the server confirms the command.
+            target_x = (goal_col + 0.5) * TILE_SIZE
+            target_y = (goal_row + 0.5) * TILE_SIZE
+            for u in all_sel:
+                speed = _PREDICTION_SPEEDS.get(type(u).__name__, 80.0)
+                self._predictions[u.entity_id] = (target_x, target_y, speed)
             self._cmd_queue.put({
                 "type":     "CMD_MOVE",
                 "unit_ids": [u.entity_id for u in all_sel],

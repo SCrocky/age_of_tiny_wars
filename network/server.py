@@ -2,8 +2,9 @@
 Authoritative game server.
 
 Runs the full game simulation headlessly and broadcasts state snapshots at
-10 Hz over TCP.  Clients send length-prefixed msgpack command messages; the
-server applies them on the next available tick.
+20 Hz over UDP (with TCP fallback until the UDP handshake completes).
+Clients send length-prefixed msgpack command messages over TCP; the server
+applies them on the next available tick.
 
 Wire framing: every message (both directions) is prefixed with a 4-byte
 big-endian unsigned integer giving the payload length.
@@ -11,6 +12,7 @@ big-endian unsigned integer giving the payload length.
 
 import asyncio
 import math
+import msgpack
 import os
 import struct
 import time
@@ -24,10 +26,11 @@ from entities.building import Castle, Tower
 from entities.archer import Archer
 from entities.warrior import Warrior
 from systems.pathfinding import astar
-from network.serialization import build_snapshot, encode_frame, deserialize_command
+from network.serialization import build_snapshot, build_delta_snapshot, encode_frame, deserialize_command
+from network.udp import ServerUDPProtocol
 
 TICK_RATE      = 60       # game simulation Hz
-SNAPSHOT_RATE  = 10       # state broadcasts per second
+SNAPSHOT_RATE  = 20       # state broadcasts per second
 _TICKS_PER_SNAP = TICK_RATE // SNAPSHOT_RATE
 
 
@@ -60,27 +63,58 @@ class GameServer:
         self._save_pending: str | None = None
         self._pending_garrisons: dict[int, object] = {}  # archer entity_id → Tower
         self._last_save_file: str | None = None
+        # Maps team → {entity_id: serialized_dict} from the last snapshot sent.
+        # Used to compute per-client delta snapshots.
+        self._prev_entities_by_team: dict[str, dict[int, dict]] = {}
+        self._udp: ServerUDPProtocol | None = None
+        self._udp_port: int | None = None
+        self._reconnect_tasks: list[asyncio.Task] = []
 
-    async def run(self, players: list):
+    async def run(self, players: list, udp_port: int | None = None):
         """
-        `players` is the list of (reader, writer, team) returned by lobby.
+        `players` is the list of (reader, writer, team[, nonce]) returned by lobby.
         Starts the game loop and per-client read loops concurrently.
+
+        If `udp_port` is given, opens a UDP socket on that port and registers
+        each player's nonce so snapshot delivery can switch to UDP once the
+        client sends its UDP_HELLO.
         """
-        for reader, writer, team in players:
+        # Open UDP endpoint if requested.
+        if udp_port is not None:
+            loop = asyncio.get_running_loop()
+            self._udp = ServerUDPProtocol()
+            try:
+                await loop.create_datagram_endpoint(
+                    lambda: self._udp,
+                    local_addr=("0.0.0.0", udp_port),
+                )
+                self._udp_port = udp_port
+                print(f"[server] UDP snapshot socket on port {udp_port}")
+            except OSError as e:
+                print(f"[server] UDP unavailable ({e}), falling back to TCP snapshots")
+                self._udp = None
+
+        for entry in players:
+            reader, writer, team = entry[0], entry[1], entry[2]
+            nonce = entry[3] if len(entry) > 3 else None
             self._writers[team] = writer
+            if self._udp and nonce:
+                self._udp.register_nonce(nonce, team)
 
         client_tasks = [
-            asyncio.create_task(self._client_reader(reader, team))
-            for reader, writer, team in players
+            asyncio.create_task(self._client_reader(entry[0], entry[2]))
+            for entry in players
         ]
         loop_task = asyncio.create_task(self._game_loop())
 
         try:
             await loop_task
         finally:
-            for task in client_tasks:
+            all_tasks = client_tasks + self._reconnect_tasks
+            for task in all_tasks:
                 task.cancel()
-            await asyncio.gather(*client_tasks, return_exceptions=True)
+            await asyncio.gather(*all_tasks, return_exceptions=True)
+            self._reconnect_tasks.clear()
 
     # ------------------------------------------------------------------
     # Game loop
@@ -140,31 +174,56 @@ class GameServer:
     # ------------------------------------------------------------------
 
     async def _broadcast_snapshot(self):
-        snap = build_snapshot(self.game, self._tick, paused=self._paused)
-        encoded = None  # lazily encode only if TCP clients need it
+        # Serialize entities once; reuse for all clients.
+        full_snap = build_snapshot(self.game, self._tick, paused=self._paused)
+        entities  = full_snap["entities"]
+        current_by_id: dict[int, dict] = {d["id"]: d for d in entities}
+
+        full_encoded: bytes | None = None  # lazily encode the full snap if needed
         dead = []
+
         for team, writer in self._writers.items():
             try:
                 if hasattr(writer, "write_snapshot"):
-                    writer.write_snapshot(snap)
+                    # Headless / AI writer — always gets the full dict.
+                    writer.write_snapshot(full_snap)
+                    continue
+
+                prev = self._prev_entities_by_team.get(team)
+                if prev is None:
+                    # First snapshot — send full state.
+                    if full_encoded is None:
+                        full_encoded = encode_frame(full_snap)
+                    encoded = full_encoded
                 else:
-                    if encoded is None:
-                        encoded = encode_frame(snap)
+                    delta = build_delta_snapshot(
+                        entities, self._tick, prev,
+                        self.game.economy, paused=self._paused,
+                    )
+                    encoded = encode_frame(delta)
+
+                self._prev_entities_by_team[team] = current_by_id
+
+                # Prefer UDP (fire-and-forget, no HOL blocking).  Fall back to
+                # TCP for clients that haven't completed the UDP handshake yet.
+                if self._udp and self._udp.has_client(team):
+                    self._udp.send_snapshot(team, encoded)
+                else:
                     writer.write(encoded)
-                await writer.drain()
+                    await writer.drain()
+
             except (ConnectionResetError, BrokenPipeError, OSError):
                 dead.append(team)
+
         for team in dead:
             self._handle_disconnect(team)
+
         if self._last_save_file:
             await self._broadcast({"type": "SAVE_OK", "file": self._last_save_file})
             self._last_save_file = None
 
     async def _broadcast(self, obj: dict):
-        import msgpack
-        payload = msgpack.packb(obj, use_bin_type=True)
-        framed = struct.pack(">I", len(payload)) + payload
-        await self._send_all(framed)
+        await self._send_all(encode_frame(obj))
 
     async def _send_all(self, data: bytes):
         dead = []
@@ -198,8 +257,11 @@ class GameServer:
             self._disconnected.add(team)
             print(f"[server] {team} disconnected — pausing game for {RECONNECT_TIMEOUT}s")
             self._writers.pop(team, None)
+            self._prev_entities_by_team.pop(team, None)  # force full snap on reconnect
+            if self._udp:
+                self._udp.remove_client(team)
             self._paused = True
-            asyncio.create_task(self._reconnect_timeout(team))
+            self._reconnect_tasks.append(asyncio.create_task(self._reconnect_timeout(team)))
 
     async def _reconnect_timeout(self, team: str):
         deadline = time.monotonic() + RECONNECT_TIMEOUT

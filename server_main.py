@@ -102,7 +102,7 @@ def _validate_scene_matches_seats(scene_path: str,
 
 
 async def main(scene_path: str, host: str, port: int,
-               seats: list[tuple[str, str]]):
+               seats: list[tuple[str, str]], udp_port: int | None = None):
     import json
     from network.lobby import wait_for_humans
     from network.server import GameServer
@@ -122,14 +122,15 @@ async def main(scene_path: str, host: str, port: int,
         ais.append(ai)
         ai_tasks.append(asyncio.create_task(ai.run()))
 
-    humans = await wait_for_humans(host, port, scene_path, human_teams)
+    humans = await wait_for_humans(host, port, scene_path, human_teams,
+                                   udp_port=udp_port)
 
     players = list(humans) + [(ai.reader, ai.writer, ai.team) for ai in ais]
 
     server = GameServer(scene_path)
     print(f"[server] Starting game — {len(humans)} human(s), {len(ais)} AI(s)")
     try:
-        await server.run(players)
+        await server.run(players, udp_port=udp_port)
     finally:
         for t in ai_tasks:
             t.cancel()
@@ -142,7 +143,9 @@ if __name__ == "__main__":
     parser.add_argument("--size",  default="large", choices=["small", "medium", "large"],
                         help="Map size when generating a fresh map (default: large)")
     parser.add_argument("--host",  default="0.0.0.0")
-    parser.add_argument("--port",  default=9876, type=int)
+    parser.add_argument("--port",     default=9876, type=int)
+    parser.add_argument("--udp-port", default=None, type=int,
+                        help="UDP port for snapshot delivery (default: TCP port + 1)")
     parser.add_argument(
         "--players", default="blue=human,black=human",
         help="Comma-separated team=role pairs (2–5 seats), e.g. "
@@ -165,4 +168,5 @@ if __name__ == "__main__":
     else:
         _validate_scene_matches_seats(scene, seats)
 
-    asyncio.run(main(scene, args.host, args.port, seats))
+    udp_port = args.udp_port if args.udp_port is not None else args.port + 1
+    asyncio.run(main(scene, args.host, args.port, seats, udp_port=udp_port))

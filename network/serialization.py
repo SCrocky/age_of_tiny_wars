@@ -174,6 +174,33 @@ def build_snapshot(game, tick: int, paused: bool = False) -> dict:
     }
 
 
+def build_delta_snapshot(
+    full_entities: list[dict],
+    tick: int,
+    prev_by_id: dict[int, dict],
+    economy: dict,
+    paused: bool = False,
+) -> dict:
+    """
+    Build a delta snapshot from a pre-serialized entity list.
+
+    Only entities that differ from prev_by_id are included.  Entity IDs that
+    were in prev_by_id but are absent from full_entities appear in "removed".
+    """
+    current_ids = {d["id"] for d in full_entities}
+    changed  = [d for d in full_entities if d != prev_by_id.get(d["id"])]
+    removed  = [eid for eid in prev_by_id if eid not in current_ids]
+    return {
+        "type":     "GAME_STATE",
+        "tick":     tick,
+        "delta":    True,
+        "paused":   paused,
+        "economy":  economy,
+        "entities": changed,
+        "removed":  removed,
+    }
+
+
 def serialize_snapshot(game, tick: int, paused: bool = False) -> bytes:
     return encode_frame(build_snapshot(game, tick, paused))
 

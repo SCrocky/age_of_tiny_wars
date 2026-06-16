@@ -50,6 +50,7 @@ def _network_thread(host: str, port: int, inbox: queue.Queue, outbox: queue.Queu
 
         while True:
             recv_task = asyncio.create_task(client.receive_loop(inbox.put))
+            udp_task  = asyncio.create_task(client.receive_udp_loop(inbox.put))
 
             async def send_loop():
                 while True:
@@ -59,8 +60,9 @@ def _network_thread(host: str, port: int, inbox: queue.Queue, outbox: queue.Queu
                         await client.send_command(cmd)
 
             send_task = asyncio.create_task(send_loop())
-            await recv_task  # returns when connection drops
+            await recv_task  # returns when TCP connection drops
             send_task.cancel()
+            udp_task.cancel()
 
             # Notify main thread of disconnect
             inbox.put({"type": "DISCONNECTED"})

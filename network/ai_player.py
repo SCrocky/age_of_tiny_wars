@@ -14,6 +14,8 @@ import struct
 
 import msgpack
 
+from network.serialization import encode_frame
+
 from ai.bot import BotAI
 
 
@@ -93,5 +95,4 @@ class AIPlayer:
                 self._feed(cmd)
 
     def _feed(self, cmd: dict) -> None:
-        payload = msgpack.packb(cmd, use_bin_type=True)
-        self.reader.feed_data(struct.pack(">I", len(payload)) + payload)
+        self.reader.feed_data(encode_frame(cmd))
