@@ -3,7 +3,11 @@ import pygame
 from pygame._sdl2.video import Renderer, Texture
 
 _renderer: Renderer | None = None
-_surf_to_tex: dict[int, Texture] = {}
+# Keyed by id(surf). The surface is stored alongside its texture to keep it
+# alive: while the entry exists, the surface can't be garbage-collected, so its
+# id() can never be reused by a different surface — which would otherwise return
+# a stale texture for the new surface.
+_surf_to_tex: dict[int, tuple[pygame.Surface, Texture]] = {}
 _font_cache: dict[int, pygame.font.Font] = {}
 
 _circle_tex: Texture | None = None
@@ -29,12 +33,13 @@ def init(renderer: Renderer) -> None:
 def get_texture(surf: pygame.Surface) -> Texture:
     """Return the cached GPU Texture for a persistent surface, uploading once."""
     sid = id(surf)
-    tex = _surf_to_tex.get(sid)
-    if tex is None:
+    entry = _surf_to_tex.get(sid)
+    if entry is None:
         tex = Texture.from_surface(_renderer, surf)
         tex.blend_mode = pygame.BLENDMODE_BLEND
-        _surf_to_tex[sid] = tex
-    return tex
+        _surf_to_tex[sid] = (surf, tex)
+        return tex
+    return entry[1]
 
 
 def make_texture(surf: pygame.Surface) -> Texture:
