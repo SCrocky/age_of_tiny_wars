@@ -138,9 +138,6 @@ class HUD:
             self._btn_avatars[n] = pygame.transform.scale(self._get_avatar(n), (size, size))
         return self._btn_avatars[n]
 
-    def on_zoom_changed(self) -> None:
-        self._btn_avatars.clear()
-
     # ------------------------------------------------------------------
     # Drawing helpers
     # ------------------------------------------------------------------

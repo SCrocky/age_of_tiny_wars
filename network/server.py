@@ -26,12 +26,20 @@ from entities.building import Castle, Tower
 from entities.archer import Archer
 from entities.warrior import Warrior
 from systems.pathfinding import astar
-from network.serialization import build_snapshot, build_delta_snapshot, encode_frame, deserialize_command
+from network.serialization import build_snapshot, build_delta_snapshot, encode_frame, encode_payload, deserialize_command
 from network.udp import ServerUDPProtocol
 
 TICK_RATE      = 60       # game simulation Hz
 SNAPSHOT_RATE  = 20       # state broadcasts per second
 _TICKS_PER_SNAP = TICK_RATE // SNAPSHOT_RATE
+
+# Periodically resend a full snapshot ("keyframe") instead of a delta. Deltas
+# travel over unreliable UDP, so a dropped delta would otherwise strand a
+# one-shot state change (a unit's final resting position, an hp tick, an
+# animation switch) until that entity next changes. Keyframes re-baseline every
+# client so any lost state self-heals within this interval.
+KEYFRAME_INTERVAL_SEC = 1.0
+_SNAPSHOTS_PER_KEYFRAME = max(1, int(SNAPSHOT_RATE * KEYFRAME_INTERVAL_SEC))
 
 
 async def _read_frame(reader: asyncio.StreamReader) -> bytes | None:
@@ -179,7 +187,14 @@ class GameServer:
         entities  = full_snap["entities"]
         current_by_id: dict[int, dict] = {d["id"]: d for d in entities}
 
-        full_encoded: bytes | None = None  # lazily encode the full snap if needed
+        snap_index = self._tick // _TICKS_PER_SNAP
+        is_keyframe = (snap_index % _SNAPSHOTS_PER_KEYFRAME == 0)
+
+        # Lazily encode the shared full snapshot, once per transport flavour:
+        # raw msgpack payload for UDP (fragmented, self-delimiting), and a
+        # length-prefixed frame for TCP.
+        full_payload: bytes | None = None
+        full_frame:   bytes | None = None
         dead = []
 
         for team, writer in self._writers.items():
@@ -190,25 +205,37 @@ class GameServer:
                     continue
 
                 prev = self._prev_entities_by_team.get(team)
-                if prev is None:
-                    # First snapshot — send full state.
-                    if full_encoded is None:
-                        full_encoded = encode_frame(full_snap)
-                    encoded = full_encoded
+                if prev is None or is_keyframe:
+                    # First snapshot, or periodic keyframe — send full state so
+                    # the client re-baselines and any UDP-dropped delta heals.
+                    snap_dict = full_snap
+                    is_full = True
                 else:
-                    delta = build_delta_snapshot(
+                    snap_dict = build_delta_snapshot(
                         entities, self._tick, prev,
                         self.game.economy, paused=self._paused,
                     )
-                    encoded = encode_frame(delta)
+                    is_full = False
 
                 self._prev_entities_by_team[team] = current_by_id
 
                 # Prefer UDP (fire-and-forget, no HOL blocking).  Fall back to
                 # TCP for clients that haven't completed the UDP handshake yet.
                 if self._udp and self._udp.has_client(team):
-                    self._udp.send_snapshot(team, encoded)
+                    if is_full:
+                        if full_payload is None:
+                            full_payload = encode_payload(full_snap)
+                        payload = full_payload
+                    else:
+                        payload = encode_payload(snap_dict)
+                    self._udp.send_snapshot(team, self._tick, payload)
                 else:
+                    if is_full:
+                        if full_frame is None:
+                            full_frame = encode_frame(full_snap)
+                        encoded = full_frame
+                    else:
+                        encoded = encode_frame(snap_dict)
                     writer.write(encoded)
                     await writer.drain()
 

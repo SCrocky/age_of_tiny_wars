@@ -59,6 +59,11 @@ def decode_frame(data: bytes) -> dict:
     return _unpack(data)
 
 
+def encode_payload(obj: dict) -> bytes:
+    """Raw msgpack bytes with no length prefix — for self-delimiting UDP datagrams."""
+    return msgpack.packb(obj, use_bin_type=True)
+
+
 # ---------------------------------------------------------------------------
 # Snapshot serialization
 # ---------------------------------------------------------------------------

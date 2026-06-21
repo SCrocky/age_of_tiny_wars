@@ -71,6 +71,16 @@ class EntityProxy:
         self.entity_id:    int   = 0
         self.x:            float = 0.0
         self.y:            float = 0.0
+
+        # Position history for client-side interpolation. interp_curr is the
+        # position from the latest snapshot; interp_prev the one before. The
+        # renderer lerps prev -> curr over one snapshot interval. Kept per-proxy
+        # (not per-snapshot-message) so delta snapshots that omit an unchanged
+        # entity never lose its interpolation source.
+        self.interp_prev_x: float = 0.0
+        self.interp_prev_y: float = 0.0
+        self.interp_curr_x: float = 0.0
+        self.interp_curr_y: float = 0.0
         self.team:         str   = ""
         self.alive:        bool  = True
         self.hp:           int   = 1
@@ -174,6 +184,20 @@ class EntityProxy:
         dx = sx - wx
         dy = sy - wy
         return dx * dx + dy * dy <= r * r
+
+    def init_interp(self):
+        """Seed interpolation history for a freshly created proxy so it renders
+        statically at its spawn position instead of lerping in from (0, 0)."""
+        self.interp_prev_x = self.interp_curr_x = self.x
+        self.interp_prev_y = self.interp_curr_y = self.y
+
+    def shift_interp(self):
+        """Advance interpolation history by one snapshot: the previous current
+        position becomes prev, and the latest authoritative (x, y) becomes curr.
+        For an entity that didn't move this snapshot, prev == curr, so it renders
+        statically."""
+        self.interp_prev_x, self.interp_prev_y = self.interp_curr_x, self.interp_curr_y
+        self.interp_curr_x, self.interp_curr_y = self.x, self.y
 
     def update_from(self, data: dict):
         self.entity_id    = data["id"]

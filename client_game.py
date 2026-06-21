@@ -30,6 +30,11 @@ from entities.teams import BANNER_COLORS, teams_from_scene
 
 DRAG_THRESHOLD = 5
 
+# Must mirror network/server.py. Used to convert snapshot tick numbers into a
+# wall-clock interval for interpolation pacing.
+SERVER_TICK_HZ = 60
+SNAPSHOT_RATE  = 20
+
 # Unit MOVE_SPEED values mirrored from their entity classes (px/s).
 _PREDICTION_SPEEDS: dict[str, float] = {
     "Archer":  96.0,
@@ -68,12 +73,14 @@ class ClientGame:
         self._arrows:     list[EntityProxy] = []
         self._resources:  list[EntityProxy] = []
 
-        self._snap_prev:   dict | None = None
-        self._snap_curr:   dict | None = None
-        self._snap_prev_by_id: dict[int, dict] = {}
-        self._snap_curr_by_id: dict[int, dict] = {}
-        self._t_prev:      float = 0.0
-        self._t_curr:      float = 0.0
+        # Client-side interpolation clock. We render the world one snapshot
+        # interval in the past, lerping each proxy's interp_prev -> interp_curr.
+        # The interval is derived from the server tick cadence (not packet
+        # arrival times) so network jitter can't distort motion pacing.
+        self._has_snapshot:     bool  = False
+        self._last_snap_tick:   int   = -1
+        self._interp_curr_local_t: float = 0.0          # monotonic() at latest snap
+        self._interp_interval:  float = 1.0 / SNAPSHOT_RATE
 
         self.economy: dict = {
             t: {"gold": 0, "wood": 0, "meat": 0, "pop": 0, "pop_cap": 0}
@@ -99,6 +106,11 @@ class ClientGame:
 
         # entity_id → (target_x, target_y, speed) — cleared on snapshot reconcile
         self._predictions: dict[int, tuple[float, float, float]] = {}
+
+        # entity_id → [offset_x, offset_y] — decaying render-space correction
+        # applied when a prediction is reconciled with the authoritative
+        # position, so the unit eases onto the server path instead of snapping.
+        self._render_offset: dict[int, list[float]] = {}
 
         self._winner: str | None = None
         self._paused: bool = False
@@ -137,18 +149,32 @@ class ClientGame:
     def _apply_snapshot(self, snap: dict):
         now = time.monotonic()
 
-        self._snap_prev       = self._snap_curr
-        self._snap_prev_by_id = self._snap_curr_by_id
-        self._t_prev          = self._t_curr
-        self._snap_curr       = snap
-        self._snap_curr_by_id = {d["id"]: d for d in snap.get("entities", [])}
-        self._t_curr          = now
+        # Pace interpolation by the server tick cadence, not packet arrival
+        # times: the gap between consecutive snapshot ticks (normally 3 ticks =
+        # 50 ms) is jitter-free. _interp_curr_local_t anchors that interval to
+        # the local clock so render() can advance alpha by real elapsed time.
+        tick = snap.get("tick", self._last_snap_tick + 1)
+        if self._has_snapshot and tick > self._last_snap_tick:
+            self._interp_interval = (tick - self._last_snap_tick) / SERVER_TICK_HZ
+        self._last_snap_tick      = tick
+        self._interp_curr_local_t = now
+        self._has_snapshot        = True
 
         eco = snap.get("economy")
         if eco:
             self.economy = eco
 
+        # Remember where predicted entities are being drawn right now, so that
+        # if this snapshot reconciles them we can ease the correction instead of
+        # snapping (the predicted straight line rarely matches the server's
+        # A*-routed path).
+        pred_render_pos = {
+            eid: (self._proxies[eid].x, self._proxies[eid].y)
+            for eid in self._predictions if eid in self._proxies
+        }
+
         is_delta = snap.get("delta", False)
+        new_proxies: list[EntityProxy] = []
 
         if is_delta:
             # Merge: update/add changed entities, remove explicitly deleted ones.
@@ -157,12 +183,15 @@ class ClientGame:
                 if eid in self._proxies:
                     self._proxies[eid].update_from(data)
                 else:
-                    self._proxies[eid] = make_proxy(data)
+                    proxy = make_proxy(data)
+                    self._proxies[eid] = proxy
+                    new_proxies.append(proxy)
                 # Server position is authoritative — drop prediction for this entity.
                 self._predictions.pop(eid, None)
             for eid in snap.get("removed", []):
                 self._proxies.pop(eid, None)
                 self._predictions.pop(eid, None)
+                self._render_offset.pop(eid, None)
         else:
             # Full snapshot: rebuild proxies from scratch.
             incoming_ids = set()
@@ -172,11 +201,38 @@ class ClientGame:
                 if eid in self._proxies:
                     self._proxies[eid].update_from(data)
                 else:
-                    self._proxies[eid] = make_proxy(data)
+                    proxy = make_proxy(data)
+                    self._proxies[eid] = proxy
+                    new_proxies.append(proxy)
                 self._predictions.pop(eid, None)
             for dead_id in set(self._proxies) - incoming_ids:
                 del self._proxies[dead_id]
                 self._predictions.pop(dead_id, None)
+                self._render_offset.pop(dead_id, None)
+
+        # Advance interpolation history for every live proxy (prev <- curr,
+        # curr <- latest x/y). Freshly created proxies seed both ends to their
+        # spawn position so they don't lerp in from the origin.
+        for proxy in new_proxies:
+            proxy.init_interp()
+        for proxy in self._proxies.values():
+            proxy.shift_interp()
+
+        # For any prediction that this snapshot just reconciled, seed a decaying
+        # offset = (where we were drawing it) − (where interpolation will now
+        # place it). update() decays it to zero over ~100 ms.
+        for eid, (px, py) in pred_render_pos.items():
+            if eid in self._predictions:
+                continue  # still predicting — server hasn't acked the move yet
+            proxy = self._proxies.get(eid)
+            if proxy is None:
+                continue
+            ox = px - proxy.interp_prev_x   # interp pos at alpha 0 right after shift
+            oy = py - proxy.interp_prev_y
+            if abs(ox) > 0.5 or abs(oy) > 0.5:
+                self._render_offset[eid] = [ox, oy]
+            else:
+                self._render_offset.pop(eid, None)
 
         # Camera: find our castle from proxies (works for both full and delta).
         if not self._camera_on_castle:
@@ -215,21 +271,32 @@ class ClientGame:
     # ------------------------------------------------------------------
 
     def _lerped_pos(self, proxy: EntityProxy) -> tuple[float, float]:
-        if self._snap_prev is None or self._t_curr == self._t_prev:
+        if not self._has_snapshot:
             return proxy.x, proxy.y
 
-        elapsed = time.monotonic() - self._t_curr
-        interval = self._t_curr - self._t_prev
-        # Allow alpha > 1.0 so we extrapolate when the next snapshot is late.
-        # Capped at 2.0 to prevent runaway overshoots.
-        alpha = min(2.0, elapsed / max(0.001, interval))
-
-        prev_data = self._snap_prev_by_id.get(proxy.entity_id)
-        if prev_data is None:
+        # Locally predicted entities render at their predicted position; the
+        # server snapshot drops the prediction and they rejoin interpolation.
+        if proxy.entity_id in self._predictions:
             return proxy.x, proxy.y
 
-        px = prev_data["x"] + (proxy.x - prev_data["x"]) * alpha
-        py = prev_data["y"] + (proxy.y - prev_data["y"]) * alpha
+        # Render one snapshot interval in the past: alpha walks prev -> curr as
+        # real time elapses since the latest snapshot arrived. Clamped to [0, 1]
+        # so a late packet pauses the entity at curr instead of extrapolating
+        # past it and snapping back when the packet finally lands.
+        elapsed = time.monotonic() - self._interp_curr_local_t
+        alpha = elapsed / self._interp_interval
+        if alpha < 0.0:
+            alpha = 0.0
+        elif alpha > 1.0:
+            alpha = 1.0
+
+        px = proxy.interp_prev_x + (proxy.interp_curr_x - proxy.interp_prev_x) * alpha
+        py = proxy.interp_prev_y + (proxy.interp_curr_y - proxy.interp_prev_y) * alpha
+
+        off = self._render_offset.get(proxy.entity_id)
+        if off is not None:
+            px += off[0]
+            py += off[1]
         return px, py
 
     def _apply_lerp(self):
@@ -315,7 +382,6 @@ class ClientGame:
         elif event.type == pygame.MOUSEWHEEL:
             lx, ly = self.viewport.to_logical(*self._current_mouse_pos)
             self.camera.zoom_at(lx, ly, event.y)
-            self.hud.on_zoom_changed()
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
@@ -422,6 +488,17 @@ class ClientGame:
             proxy.y += dy / dist * step
         for eid in done:
             del self._predictions[eid]
+
+        # Decay reconcile offsets toward zero (100 ms half-life) so corrected
+        # units glide onto the server path.
+        if self._render_offset:
+            factor = 0.5 ** (dt / 0.1)
+            for eid in list(self._render_offset):
+                off = self._render_offset[eid]
+                off[0] *= factor
+                off[1] *= factor
+                if abs(off[0]) < 0.5 and abs(off[1]) < 0.5:
+                    del self._render_offset[eid]
 
     # ------------------------------------------------------------------
     # Click handlers

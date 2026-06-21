@@ -88,13 +88,19 @@ class GameClient:
         Skips datagrams that arrive out of order (older tick than last seen).
         Returns when the UDP socket is closed (None sentinel from protocol).
         """
+        from network.udp import FragmentReassembler
+
+        reassembler = FragmentReassembler()
         last_tick = -1
         while True:
             data = await self._udp_queue.get()
             if data is None:
                 return
+            payload = reassembler.feed(data)
+            if payload is None:
+                continue  # incomplete snapshot — wait for more fragments
             try:
-                msg = msgpack.unpackb(data, raw=False)
+                msg = msgpack.unpackb(payload, raw=False)
             except Exception:
                 continue
             tick = msg.get("tick", -1)
