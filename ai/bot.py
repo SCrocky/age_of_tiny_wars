@@ -12,11 +12,26 @@ TILE_SIZE = 64
 TARGET_PAWNS        = 4    # maintain at least this many gatherers
 ATTACK_RETARGET     = 30   # re-issue attack order every N snapshots (~3 s)
 
+# --- Combat tuning (grouped so a difficulty layer can override later) ---
+DEFEND_RADIUS   = 8 * TILE_SIZE   # enemies this close to the castle trigger defense
+RAID_ARMY_MIN   = 3               # start telegraphed raids once we have this many units
+RAID_PARTY_SIZE = 2               # units committed per harassment raid
+RAID_INTERVAL   = 60              # snapshots between raids (~6 s)
+PUSH_ARMY_SIZE  = 8               # mass this many units, then commit everything
+
 _BUILDING_COSTS = {
     "Barracks": {"wood": 50, "gold": 30},
     "Archery":  {"wood": 30, "gold": 20},
     "House":    {"wood": 20},
 }
+
+# Resource type -> gather-node type, ranked-scarcest-first in _cmd_gather.
+_RES_NODE = {"wood": "WoodNode", "gold": "GoldNode", "meat": "MeatNode"}
+
+# Enemy entity types that are NOT a combat threat to our base.
+_BUILDING_TYPES = {"Castle", "Archery", "Barracks", "House", "Blueprint"}
+_RESOURCE_TYPES = {"GoldNode", "WoodNode", "MeatNode"}
+_NON_THREAT     = _BUILDING_TYPES | _RESOURCE_TYPES | {"Pawn"}
 
 
 class BotAI:
@@ -40,6 +55,7 @@ class BotAI:
         self._house_slots:    int      = 0        # number of houses requested so far
 
         self._attack_tick: int = -ATTACK_RETARGET
+        self._raid_tick:   int = -RAID_INTERVAL
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -92,12 +108,23 @@ class BotAI:
         idle = [p for p in self._my_pawns if p.get("pawn_task") == "idle"]
         if not idle or not self._resources:
             return []
+        # Send each pawn to the scarcest resource it can reach, so all three
+        # stockpiles keep flowing instead of every pawn piling on the closest node.
+        ranked = sorted(_RES_NODE, key=lambda r: self._eco.get(r, 0))
         cmds = []
         for pawn in idle:
-            res = min(self._resources,
-                      key=lambda r: math.hypot(r["x"] - pawn["x"], r["y"] - pawn["y"]))
+            node = None
+            for rtype in ranked:
+                candidates = [r for r in self._resources if r["type"] == _RES_NODE[rtype]]
+                if candidates:
+                    node = min(candidates,
+                               key=lambda r: math.hypot(r["x"] - pawn["x"], r["y"] - pawn["y"]))
+                    break
+            if node is None:  # fallback: nearest node of any type
+                node = min(self._resources,
+                           key=lambda r: math.hypot(r["x"] - pawn["x"], r["y"] - pawn["y"]))
             cmds.append({"type": "CMD_GATHER", "pawn_ids": [pawn["id"]],
-                          "resource_id": res["id"]})
+                          "resource_id": node["id"]})
         return cmds
 
     def _cmd_spawn(self) -> list[dict]:
@@ -162,21 +189,62 @@ class BotAI:
         return []
 
     def _cmd_attack(self, tick: int) -> list[dict]:
-        if tick - self._attack_tick < ATTACK_RETARGET:
+        if not self._my_units or not self._enemy:
             return []
+
+        # Phase A — DEFEND: a threatened base overrides everything. Re-targeting
+        # every unit (set_attack_target wins over current orders) recalls raiders
+        # and pushers back home.
+        threats = self._threats_near_base()
+        if threats:
+            ax, ay = self._attack_anchor()
+            target = min(threats, key=lambda e: math.hypot(e["x"] - ax, e["y"] - ay))
+            self._attack_tick = tick
+            return [{"type": "CMD_ATTACK",
+                     "unit_ids": [u["id"] for u in self._my_units],
+                     "target_id": target["id"]}]
+
         idle_units = [u for u in self._my_units if u.get("anim_key") == "idle"]
-        if not idle_units or not self._enemy:
+        if not idle_units:
             return []
 
-        ax, ay  = self._attack_anchor()
-        castles = [e for e in self._enemy if e["type"] == "Castle"]
-        pool    = castles if castles else self._enemy
-        target  = min(pool, key=lambda e: math.hypot(e["x"] - ax, e["y"] - ay))
+        # Phase B — PUSH: once an army is massed, commit it all at the enemy castle.
+        if len(self._my_units) >= PUSH_ARMY_SIZE:
+            if tick - self._attack_tick < ATTACK_RETARGET:
+                return []
+            self._attack_tick = tick
+            return [self._assault(idle_units, prefer_castle=True)]
 
-        self._attack_tick = tick
-        return [{"type": "CMD_ATTACK",
-                 "unit_ids": [u["id"] for u in idle_units],
-                 "target_id": target["id"]}]
+        # Phase C — RAID: small, repeated harassment that telegraphs the coming
+        # push and gives the human fair warning. Keeps the bulk home as reserve.
+        if len(self._my_units) >= RAID_ARMY_MIN and tick - self._raid_tick >= RAID_INTERVAL:
+            party = idle_units[:RAID_PARTY_SIZE]
+            if party:
+                self._raid_tick = tick
+                return [self._assault(party, prefer_castle=False)]
+        return []
+
+    def _assault(self, units: list[dict], prefer_castle: bool) -> dict:
+        """One CMD_ATTACK sending `units` at the nearest enemy (castle if asked)."""
+        ax, ay = self._attack_anchor()
+        pool   = self._enemy
+        if prefer_castle:
+            castles = [e for e in self._enemy if e["type"] == "Castle"]
+            if castles:
+                pool = castles
+        target = min(pool, key=lambda e: math.hypot(e["x"] - ax, e["y"] - ay))
+        return {"type": "CMD_ATTACK",
+                "unit_ids": [u["id"] for u in units],
+                "target_id": target["id"]}
+
+    def _threats_near_base(self) -> list[dict]:
+        """Enemy mobile combat units within DEFEND_RADIUS of our castle."""
+        castle = self._my_castle
+        if not castle:
+            return []
+        return [e for e in self._enemy
+                if e["type"] not in _NON_THREAT
+                and math.hypot(e["x"] - castle["x"], e["y"] - castle["y"]) <= DEFEND_RADIUS]
 
     def _attack_anchor(self) -> tuple[float, float]:
         """Origin for closest-enemy ranking: own castle, else centroid of own
