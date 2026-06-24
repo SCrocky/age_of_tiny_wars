@@ -7,6 +7,9 @@ import asyncio
 import json
 
 from network.serialization import encode_frame
+from logging_config import get_logger
+
+log = get_logger("lobby")
 
 
 async def wait_for_humans(host: str, port: int, scene_path: str,
@@ -42,14 +45,14 @@ async def wait_for_humans(host: str, port: int, scene_path: str,
         team  = human_teams[idx]
         nonce = os.urandom(16).hex()
         players.append((reader, writer, team, nonce))
-        print(f"[lobby] Player {idx + 1}/{len(human_teams)} connected → team={team}")
+        log.info("Player %d/%d connected → team=%s", idx + 1, len(human_teams), team)
         if len(players) == len(human_teams):
             ready.set()
 
     server = await asyncio.start_server(_handle, host, port)
     addr = server.sockets[0].getsockname()
-    print(f"[lobby] Listening on {addr[0]}:{addr[1]} — "
-          f"waiting for {len(human_teams)} player(s)…")
+    log.info("Listening on %s:%s — waiting for %d player(s)…",
+             addr[0], addr[1], len(human_teams))
 
     await ready.wait()
     server.close()  # stop accepting new connections; existing ones stay open
@@ -65,7 +68,7 @@ async def wait_for_humans(host: str, port: int, scene_path: str,
         start_tasks.append(writer.drain())
     await asyncio.gather(*start_tasks)
 
-    print(f"[lobby] GAME_START sent to {len(players)} player(s).")
+    log.info("GAME_START sent to %d player(s).", len(players))
     # Return as (reader, writer, team) for backward compat; nonce is only needed
     # by the server to register with the UDP protocol.
     return players

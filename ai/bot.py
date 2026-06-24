@@ -7,6 +7,8 @@ No asyncio — all pure synchronous decision logic.
 
 import math
 
+from logging_config import get_logger
+
 TILE_SIZE = 64
 
 TARGET_PAWNS        = 4    # maintain at least this many gatherers
@@ -57,6 +59,10 @@ class BotAI:
         self._attack_tick: int = -ATTACK_RETARGET
         self._raid_tick:   int = -RAID_INTERVAL
 
+        self.log = get_logger(f"ai.{team}")
+        self._defending:  bool = False   # tracks defend-phase transitions for logging
+        self._had_castle: bool = False   # tracks castle-lost transition for logging
+
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
@@ -64,6 +70,18 @@ class BotAI:
     def apply_snapshot(self, snap: dict) -> list[dict]:
         self._parse(snap)
         tick = snap.get("tick", 0)
+
+        if self._my_castle is None and self._had_castle:
+            self.log.warning("castle lost — base destroyed")
+        self._had_castle = self._my_castle is not None
+
+        self.log.debug("tick=%d pop=%s/%s wood=%s gold=%s meat=%s | "
+                       "pawns=%d units=%d enemies=%d",
+                       tick, self._eco.get("pop", 0), self._eco.get("pop_cap", 0),
+                       self._eco.get("wood", 0), self._eco.get("gold", 0),
+                       self._eco.get("meat", 0),
+                       len(self._my_pawns), len(self._my_units), len(self._enemy))
+
         cmds: list[dict] = []
         cmds += self._cmd_gather()
         cmds += self._cmd_spawn()
@@ -111,6 +129,7 @@ class BotAI:
         # Send each pawn to the scarcest resource it can reach, so all three
         # stockpiles keep flowing instead of every pawn piling on the closest node.
         ranked = sorted(_RES_NODE, key=lambda r: self._eco.get(r, 0))
+        self.log.debug("gather: assigning %d idle pawn(s), scarcest=%s", len(idle), ranked[0])
         cmds = []
         for pawn in idle:
             node = None
@@ -138,15 +157,18 @@ class BotAI:
 
         # Priority 1 — keep pawns stocked
         if len(self._my_pawns) < TARGET_PAWNS and self._can_afford({"meat": 20}) and castle:
+            self.log.debug("spawn Pawn (have %d/%d)", len(self._my_pawns), TARGET_PAWNS)
             return [{"type": "CMD_SPAWN", "building_id": castle["id"],
                      "unit_type": "Pawn"}]
 
         # Priority 2 — combat units
         by_type = {b["type"]: b for b in self._my_buildings}
         if "Barracks" in by_type and self._can_afford({"wood": 45, "meat": 10}):
+            self.log.debug("spawn Lancer from Barracks")
             return [{"type": "CMD_SPAWN", "building_id": by_type["Barracks"]["id"],
                      "unit_type": "Lancer"}]
         if "Archery" in by_type and self._can_afford({"wood": 15, "meat": 30}):
+            self.log.debug("spawn Archer from Archery")
             return [{"type": "CMD_SPAWN", "building_id": by_type["Archery"]["id"],
                      "unit_type": "Archer"}]
         return []
@@ -173,6 +195,7 @@ class BotAI:
                 if self._can_afford(_BUILDING_COSTS[btype]):
                     wx, wy = self._placement_pos(len(self._build_pending))
                     self._build_pending.add(btype)
+                    self.log.info("build %s at (%.0f, %.0f)", btype, wx, wy)
                     return [{"type": "CMD_BUILD", "pawn_ids": [pawn["id"]],
                              "building_type": btype, "world_x": wx, "world_y": wy}]
 
@@ -184,6 +207,7 @@ class BotAI:
                 wx, wy = self._placement_pos(3 + slot)
                 self._house_slots += 1
                 self._build_pending.add("House")
+                self.log.info("build House at (%.0f, %.0f) (pop %d/%d)", wx, wy, pop, pop_cap)
                 return [{"type": "CMD_BUILD", "pawn_ids": [pawn["id"]],
                          "building_type": "House", "world_x": wx, "world_y": wy}]
         return []
@@ -197,12 +221,20 @@ class BotAI:
         # and pushers back home.
         threats = self._threats_near_base()
         if threats:
+            if not self._defending:
+                self.log.info("DEFEND: base attacked by %d enemy unit(s) — recalling %d unit(s)",
+                              len(threats), len(self._my_units))
+                self._defending = True
             ax, ay = self._attack_anchor()
             target = min(threats, key=lambda e: math.hypot(e["x"] - ax, e["y"] - ay))
             self._attack_tick = tick
             return [{"type": "CMD_ATTACK",
                      "unit_ids": [u["id"] for u in self._my_units],
                      "target_id": target["id"]}]
+
+        if self._defending:
+            self.log.info("threat cleared — resuming offense")
+            self._defending = False
 
         idle_units = [u for u in self._my_units if u.get("anim_key") == "idle"]
         if not idle_units:
@@ -213,6 +245,8 @@ class BotAI:
             if tick - self._attack_tick < ATTACK_RETARGET:
                 return []
             self._attack_tick = tick
+            self.log.info("PUSH: committing %d unit(s) (army=%d)",
+                          len(idle_units), len(self._my_units))
             return [self._assault(idle_units, prefer_castle=True)]
 
         # Phase C — RAID: small, repeated harassment that telegraphs the coming
@@ -221,6 +255,8 @@ class BotAI:
             party = idle_units[:RAID_PARTY_SIZE]
             if party:
                 self._raid_tick = tick
+                self.log.info("RAID: harassing with %d unit(s) (army=%d)",
+                              len(party), len(self._my_units))
                 return [self._assault(party, prefer_castle=False)]
         return []
 

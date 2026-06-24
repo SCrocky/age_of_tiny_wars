@@ -19,6 +19,10 @@ import time
 import pygame
 from pygame._sdl2.video import Window, Renderer
 
+from logging_config import get_logger
+
+log = get_logger("client")
+
 SCREEN_WIDTH  = 1600
 SCREEN_HEIGHT = 900
 FPS           = 60
@@ -39,10 +43,12 @@ def _network_thread(host: str, port: int, inbox: queue.Queue, outbox: queue.Queu
         try:
             player_team, scene = await client.connect(host, port)
         except Exception as e:
+            log.error("connection to %s:%s failed: %s", host, port, e)
             start_result.append(e)
             start_event.set()
             return
 
+        log.info("connected to %s:%s as team=%s", host, port, player_team)
         start_result.append((player_team, scene))
         start_event.set()
 
@@ -65,6 +71,7 @@ def _network_thread(host: str, port: int, inbox: queue.Queue, outbox: queue.Queu
             udp_task.cancel()
 
             # Notify main thread of disconnect
+            log.warning("connection to %s:%s lost — reconnecting", host, port)
             inbox.put({"type": "DISCONNECTED"})
 
             # Reconnect with backoff
@@ -76,10 +83,11 @@ def _network_thread(host: str, port: int, inbox: queue.Queue, outbox: queue.Queu
                     await client2.connect(host, port)
                     client = client2
                     backoff = 1.0
+                    log.info("reconnected to %s:%s", host, port)
                     inbox.put({"type": "RECONNECTED"})
                     break
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug("reconnect failed (%s) — retrying in %.0fs", e, backoff)
 
     asyncio.run(run())
 
@@ -98,6 +106,8 @@ def main():
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", default=9876, type=int)
     args = parser.parse_args()
+
+    log.info("connecting to %s:%s", args.host, args.port)
 
     pygame.init()
     window   = Window("Age of Wars — Multiplayer", size=(SCREEN_WIDTH, SCREEN_HEIGHT),
@@ -156,6 +166,8 @@ def main():
         sys.exit(1)
 
     player_team, scene = result
+    log.info("game starting as team=%s (%sx%s map)",
+             player_team, scene.get("cols", "?"), scene.get("rows", "?"))
 
     # Show waiting screen until first snapshot arrives
     renderer.draw_color = (10, 20, 40, 255)
@@ -200,6 +212,7 @@ def main():
 
         renderer.present()
 
+    log.info("client shutting down")
     pygame.quit()
 
 

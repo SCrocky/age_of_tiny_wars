@@ -10,6 +10,9 @@ import struct
 import msgpack
 
 from network.serialization import encode_frame
+from logging_config import get_logger
+
+log = get_logger("client")
 
 
 class GameClient:
@@ -57,7 +60,7 @@ class GameClient:
                                   use_bin_type=True)
             transport.sendto(hello, (host, server_udp_port))
         except OSError as e:
-            print(f"[client] UDP setup failed ({e}), snapshots will arrive via TCP")
+            log.warning("UDP setup failed (%s), snapshots will arrive via TCP", e)
 
     async def send_command(self, cmd: dict):
         """Serialize and send a command dict to the server over TCP."""

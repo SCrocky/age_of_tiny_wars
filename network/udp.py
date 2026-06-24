@@ -20,6 +20,10 @@ import struct
 
 import msgpack
 
+from logging_config import get_logger
+
+log = get_logger("udp")
+
 
 # ---------------------------------------------------------------------------
 # Snapshot fragmentation
@@ -119,10 +123,10 @@ class ServerUDPProtocol(asyncio.DatagramProtocol):
             if nonce and nonce in self._pending:
                 team = self._pending.pop(nonce)
                 self._clients[team] = addr
-                print(f"[udp] {team} registered from {addr[0]}:{addr[1]}")
+                log.info("%s registered from %s:%s", team, addr[0], addr[1])
 
     def error_received(self, exc: Exception):
-        print(f"[udp] error: {exc}")
+        log.error("error: %s", exc)
 
     # ------------------------------------------------------------------
     # Server-side helpers
@@ -144,7 +148,7 @@ class ServerUDPProtocol(asyncio.DatagramProtocol):
         try:
             fragments = pack_fragments(msg_id, payload)
         except ValueError as exc:
-            print(f"[udp] {exc}; dropping snapshot")
+            log.warning("%s; dropping snapshot", exc)
             return
         for dg in fragments:
             try:

@@ -28,6 +28,9 @@ from entities.warrior import Warrior
 from systems.pathfinding import astar
 from network.serialization import build_snapshot, build_delta_snapshot, encode_frame, encode_payload, deserialize_command
 from network.udp import ServerUDPProtocol
+from logging_config import get_logger
+
+log = get_logger("server")
 
 TICK_RATE      = 60       # game simulation Hz
 SNAPSHOT_RATE  = 20       # state broadcasts per second
@@ -97,9 +100,9 @@ class GameServer:
                     local_addr=("0.0.0.0", udp_port),
                 )
                 self._udp_port = udp_port
-                print(f"[server] UDP snapshot socket on port {udp_port}")
+                log.info("UDP snapshot socket on port %s", udp_port)
             except OSError as e:
-                print(f"[server] UDP unavailable ({e}), falling back to TCP snapshots")
+                log.warning("UDP unavailable (%s), falling back to TCP snapshots", e)
                 self._udp = None
 
         for entry in players:
@@ -277,12 +280,12 @@ class GameServer:
                 cmd = deserialize_command(payload)
                 await self._command_queue.put((cmd, team))
             except Exception as e:
-                print(f"[server] bad command from {team}: {e}")
+                log.warning("bad command from %s: %s", team, e)
 
     def _handle_disconnect(self, team: str):
         if team not in self._disconnected:
             self._disconnected.add(team)
-            print(f"[server] {team} disconnected — pausing game for {RECONNECT_TIMEOUT}s")
+            log.warning("%s disconnected — pausing game for %ss", team, RECONNECT_TIMEOUT)
             self._writers.pop(team, None)
             self._prev_entities_by_team.pop(team, None)  # force full snap on reconnect
             if self._udp:
@@ -295,9 +298,9 @@ class GameServer:
         while time.monotonic() < deadline:
             await asyncio.sleep(1)
             if team not in self._disconnected:
-                print(f"[server] {team} reconnected — resuming")
+                log.info("%s reconnected — resuming", team)
                 return
-        print(f"[server] {team} did not reconnect — forfeiting")
+        log.warning("%s did not reconnect — forfeiting", team)
         # Destroy the team's Castles so _check_victory eliminates them. With
         # N>2 the remaining teams keep playing until exactly one survives.
         for b in self.game.buildings:

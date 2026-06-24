@@ -14,6 +14,9 @@ import asyncio
 import os
 import sys
 
+from logging_config import get_logger
+
+log = get_logger("server")
 
 _VALID_ROLES = ("human", "ai")
 
@@ -128,13 +131,13 @@ async def main(scene_path: str, host: str, port: int,
     players = list(humans) + [(ai.reader, ai.writer, ai.team) for ai in ais]
 
     server = GameServer(scene_path)
-    print(f"[server] Starting game — {len(humans)} human(s), {len(ais)} AI(s)")
+    log.info("Starting game — %d human(s), %d AI(s)", len(humans), len(ais))
     try:
         await server.run(players, udp_port=udp_port)
     finally:
         for t in ai_tasks:
             t.cancel()
-    print("[server] Game over.")
+    log.info("Game over.")
 
 
 if __name__ == "__main__":
@@ -162,9 +165,9 @@ if __name__ == "__main__":
 
     scene = args.scene
     if scene is None:
-        print(f"[server] Generating {args.size} map for teams: {teams}…")
+        log.info("Generating %s map for teams: %s…", args.size, teams)
         scene = _generate_scene(teams, args.size)
-        print(f"[server] Scene: {scene}")
+        log.debug("Scene: %s", scene)
     else:
         _validate_scene_matches_seats(scene, seats)
 

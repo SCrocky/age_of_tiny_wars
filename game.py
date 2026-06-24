@@ -16,6 +16,9 @@ from entities.projectile import Arrow
 from entities.blueprint import Blueprint
 from entities.teams import teams_from_scene
 from systems import collision
+from logging_config import get_logger
+
+log = get_logger("game")
 
 _BUILDING_CLS = {
     "Castle":    Castle,
@@ -173,7 +176,7 @@ class Game:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "w") as f:
             json.dump(data, f, separators=(",", ":"))
-        print(f"[game] saved → {path}")
+        log.info("saved → %s", path)
 
     def _load_scene(self, path: str):
         with open(path) as f:

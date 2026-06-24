@@ -26,6 +26,9 @@ import texture_cache
 from network.render_proxy import EntityProxy, make_proxy
 from systems.fog import FogOfWar
 from entities.teams import BANNER_COLORS, teams_from_scene
+from logging_config import get_logger
+
+log = get_logger("client.game")
 
 
 DRAG_THRESHOLD = 5
@@ -136,15 +139,19 @@ class ClientGame:
             self._apply_snapshot(msg)
         elif msg_type == "GAME_OVER":
             self._winner = msg.get("winner", "")
+            log.info("game over — winner=%s", self._winner or "?")
         elif msg_type == "DISCONNECTED":
             self._connected = False
+            log.warning("disconnected from server")
         elif msg_type == "RECONNECTED":
             self._connected = True
+            log.info("reconnected to server")
         elif msg_type == "PONG":
             self._rtt_ms = (time.monotonic() - msg.get("client_time", 0)) * 1000
         elif msg_type == "SAVE_OK":
             self._saving = False
             self._save_toast = (msg.get("file", "saved"), 3.0)
+            log.info("game saved → %s", msg.get("file", "saved"))
 
     def _apply_snapshot(self, snap: dict):
         now = time.monotonic()
@@ -154,6 +161,8 @@ class ClientGame:
         # 50 ms) is jitter-free. _interp_curr_local_t anchors that interval to
         # the local clock so render() can advance alpha by real elapsed time.
         tick = snap.get("tick", self._last_snap_tick + 1)
+        if not self._has_snapshot:
+            log.info("first snapshot received (tick=%s) — game live", tick)
         if self._has_snapshot and tick > self._last_snap_tick:
             self._interp_interval = (tick - self._last_snap_tick) / SERVER_TICK_HZ
         self._last_snap_tick      = tick
@@ -335,14 +344,14 @@ class ClientGame:
             elif event.key == pygame.K_F3:
                 self._show_debug = not self._show_debug
             elif event.key == pygame.K_p:
-                self._cmd_queue.put({"type": "CMD_PAUSE"})
+                self._queue_cmd({"type": "CMD_PAUSE"})
             elif event.key == pygame.K_s and (event.mod & pygame.KMOD_CTRL):
                 self._saving = True
-                self._cmd_queue.put({"type": "CMD_SAVE"})
+                self._queue_cmd({"type": "CMD_SAVE"})
             elif event.key == pygame.K_s:
                 lx, ly = self.viewport.to_logical(*self._current_mouse_pos)
                 wx, wy = self.camera.screen_to_world(lx, ly)
-                self._cmd_queue.put({
+                self._queue_cmd({
                     "type":    "CMD_DEV_SPAWN",
                     "world_x": wx,
                     "world_y": wy,
@@ -537,7 +546,7 @@ class ClientGame:
         if all_sel:
             goal_col = max(0, min(int(wx // TILE_SIZE), self.map.cols - 1))
             goal_row = max(0, min(int(wy // TILE_SIZE), self.map.rows - 1))
-            self._cmd_queue.put({
+            self._queue_cmd({
                 "type":     "CMD_MOVE",
                 "unit_ids": [u.entity_id for u in all_sel],
                 "goal_col": goal_col,
@@ -598,7 +607,7 @@ class ClientGame:
             None,
         )
         if own_tower and sel_archers:
-            self._cmd_queue.put({
+            self._queue_cmd({
                 "type":       "CMD_GARRISON",
                 "archer_ids": [a.entity_id for a in sel_archers],
                 "tower_id":   own_tower.entity_id,
@@ -611,7 +620,7 @@ class ClientGame:
             None,
         )
         if enemy and sel_units:
-            self._cmd_queue.put({
+            self._queue_cmd({
                 "type":     "CMD_ATTACK",
                 "unit_ids": [u.entity_id for u in sel_units],
                 "target_id": enemy.entity_id,
@@ -624,7 +633,7 @@ class ClientGame:
             None,
         )
         if resource and sel_pawns:
-            self._cmd_queue.put({
+            self._queue_cmd({
                 "type":       "CMD_GATHER",
                 "pawn_ids":   [p.entity_id for p in sel_pawns],
                 "resource_id": resource.entity_id,
@@ -637,7 +646,7 @@ class ClientGame:
             None,
         )
         if blueprint and sel_pawns:
-            self._cmd_queue.put({
+            self._queue_cmd({
                 "type":         "CMD_ASSIGN_BUILD",
                 "pawn_ids":     [p.entity_id for p in sel_pawns],
                 "blueprint_id": blueprint.entity_id,
@@ -655,12 +664,17 @@ class ClientGame:
             for u in all_sel:
                 speed = _PREDICTION_SPEEDS.get(type(u).__name__, 80.0)
                 self._predictions[u.entity_id] = (target_x, target_y, speed)
-            self._cmd_queue.put({
+            self._queue_cmd({
                 "type":     "CMD_MOVE",
                 "unit_ids": [u.entity_id for u in all_sel],
                 "goal_col": goal_col,
                 "goal_row": goal_row,
             })
+
+    def _queue_cmd(self, cmd: dict):
+        """Enqueue a player command for the network thread (DEBUG-logged)."""
+        log.debug("cmd %s", cmd.get("type"))
+        self._cmd_queue.put(cmd)
 
     def _emit_spawn(self, unit_type: str):
         sel_building = next(
@@ -669,7 +683,7 @@ class ClientGame:
         )
         if sel_building is None:
             return
-        self._cmd_queue.put({
+        self._queue_cmd({
             "type":       "CMD_SPAWN",
             "building_id": sel_building.entity_id,
             "unit_type":   unit_type,
@@ -683,7 +697,7 @@ class ClientGame:
             None,
         )
         if sel_tower:
-            self._cmd_queue.put({
+            self._queue_cmd({
                 "type":     "CMD_RELEASE",
                 "tower_id": sel_tower.entity_id,
             })
@@ -695,7 +709,7 @@ class ClientGame:
         wx, wy = self.camera.screen_to_world(sx, sy)
         sel_pawns = [p.entity_id for p in self._pawns
                      if p.selected and p.team == self.player_team]
-        self._cmd_queue.put({
+        self._queue_cmd({
             "type":          "CMD_BUILD",
             "pawn_ids":      sel_pawns,
             "building_type": name,
